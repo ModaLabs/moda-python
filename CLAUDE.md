@@ -1,7 +1,12 @@
-# OpenLLMetry Repository Guide
+# Moda Python SDK Repository Guide
 
 ## Repository Structure
 This repository contains multiple PyPI-publishable packages organized and orchestrated using Nx workspace management.
+
+### Packages
+- `packages/moda` - Main SDK with conversation threading
+- `packages/moda-openai` - OpenAI instrumentation
+- `packages/moda-anthropic` - Anthropic instrumentation
 
 ### Nx Workspace Commands
 ```bash
@@ -53,7 +58,7 @@ uv run pytest tests/ --record-mode=once
 uv run pytest tests/ --record-mode=none
 
 # Run specific test files
-uv run pytest tests/test_agents.py --record-mode=once
+uv run pytest tests/test_conversation.py --record-mode=once
 ```
 
 ### Guidance
@@ -68,12 +73,12 @@ For debugging OpenTelemetry spans and hierarchy issues, use the console exporter
 
 ```python
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter
-from traceloop.sdk import Traceloop
+import moda
 
-Traceloop.init(
+moda.init(
+    api_key="test",
     app_name="debug-app",
     exporter=ConsoleSpanExporter(),
-    # other config...
 )
 ```
 
@@ -88,3 +93,8 @@ Instrumentation packages should leverage the semantic conventions package. Their
 
 ## Code Quality
 Ruff is used for code linting. Configuration is in each package's pyproject.toml under `[tool.ruff]`.
+
+## Moda-Specific Attributes
+The SDK adds these custom span attributes:
+- `moda.conversation_id` - Stable conversation identifier based on first user message + system prompt
+- `moda.user_id` - User identifier for attribution (when set)
