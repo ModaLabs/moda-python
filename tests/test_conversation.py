@@ -230,5 +230,90 @@ class TestExtractContent:
         assert _extract_content(None) is None
 
 
+class TestPropertyStyleAPI:
+    """Tests for property-style conversation/user ID access."""
+
+    def setup_method(self):
+        """Reset state before each test."""
+        set_conversation_id_value(None)
+        set_user_id_value(None)
+
+    def teardown_method(self):
+        """Clean up after each test."""
+        set_conversation_id_value(None)
+        set_user_id_value(None)
+
+    def test_conversation_id_property_get_set(self):
+        """Test property-style conversation ID get/set."""
+        # Add moda module to path
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'packages', 'moda'))
+        import moda
+
+        # Initially None
+        assert moda.conversation_id is None
+
+        # Set via property
+        moda.conversation_id = "test_conv_123"
+        assert moda.conversation_id == "test_conv_123"
+
+        # Also accessible via getter function
+        assert get_conversation_id() == "test_conv_123"
+
+        # Clear via None
+        moda.conversation_id = None
+        assert moda.conversation_id is None
+
+    def test_user_id_property_get_set(self):
+        """Test property-style user ID get/set."""
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'packages', 'moda'))
+        import moda
+
+        # Initially None
+        assert moda.user_id is None
+
+        # Set via property
+        moda.user_id = "user_456"
+        assert moda.user_id == "user_456"
+
+        # Also accessible via getter function
+        assert get_user_id() == "user_456"
+
+        # Clear via None
+        moda.user_id = None
+        assert moda.user_id is None
+
+    def test_property_and_context_manager_consistency(self):
+        """Test that property and context manager APIs are consistent."""
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'packages', 'moda'))
+        import moda
+
+        # Set via property
+        moda.conversation_id = "prop_conv"
+        assert moda.conversation_id == "prop_conv"
+
+        # Getter function should see it
+        assert get_conversation_id() == "prop_conv"
+
+        # Context manager overrides temporarily
+        with set_conversation_id("scoped_conv"):
+            assert moda.conversation_id == "scoped_conv"
+
+        # Back to property value
+        assert moda.conversation_id == "prop_conv"
+
+    def test_property_and_value_setter_consistency(self):
+        """Test that property and set_*_value functions are consistent."""
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'packages', 'moda'))
+        import moda
+
+        # Set via value function
+        set_conversation_id_value("func_conv")
+        assert moda.conversation_id == "func_conv"
+
+        # Set via property
+        moda.conversation_id = "prop_conv"
+        assert get_conversation_id() == "prop_conv"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

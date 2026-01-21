@@ -20,22 +20,14 @@ from openai import OpenAI
 # Initialize Moda with your API key
 moda.init("moda_xxx")
 
+# Set conversation ID for your session (recommended)
+moda.conversation_id = "session_" + session_id
+
 # Use OpenAI as normal - all calls are automatically tracked
 client = OpenAI()
-
-# Turn 1
-messages = [{"role": "user", "content": "Hello!"}]
 response = client.chat.completions.create(
     model="gpt-4",
-    messages=messages
-)
-
-# Turn 2 - automatically tracked with same conversation_id
-messages.append({"role": "assistant", "content": response.choices[0].message.content})
-messages.append({"role": "user", "content": "How are you?"})
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=messages
+    messages=[{"role": "user", "content": "Hello!"}]
 )
 
 # Ensure all traces are sent
@@ -44,33 +36,43 @@ moda.flush()
 
 ## Features
 
-### Automatic Conversation Threading
+### Conversation Tracking
 
-Moda automatically computes a stable `conversation_id` for each conversation based on:
+#### Setting Conversation ID (Recommended)
+
+For production use, explicitly set a conversation ID to group related LLM calls:
+
+```python
+# Property-style (recommended)
+moda.conversation_id = "support_ticket_123"
+client.chat.completions.create(...)
+moda.conversation_id = None  # clear when done
+
+# Or use the setter function
+moda.set_conversation_id_value("support_ticket_123")
+
+# Or use context manager (scoped)
+with moda.set_conversation_id("support_ticket_123"):
+    client.chat.completions.create(...)
+```
+
+#### Setting User ID
+
+Associate LLM calls with specific users:
+
+```python
+moda.user_id = "user_12345"
+client.chat.completions.create(...)
+moda.user_id = None  # clear
+```
+
+### Automatic Fallback
+
+If you don't set a conversation ID, the SDK automatically computes a stable one from:
 - The first user message
 - The system prompt (if present)
 
-This means multi-turn conversations automatically get the same conversation ID, enabling powerful analytics and debugging.
-
-### User Attribution
-
-Track which user is making LLM calls:
-
-```python
-with moda.set_user_id("user-123"):
-    # All LLM calls here are attributed to user-123
-    client.chat.completions.create(...)
-```
-
-### Explicit Conversation IDs
-
-Override automatic conversation ID computation when needed:
-
-```python
-with moda.set_conversation_id("my-custom-id"):
-    # All LLM calls here use "my-custom-id"
-    client.chat.completions.create(...)
-```
+This works for simple use cases but explicit IDs are recommended for production.
 
 ## Supported Providers
 
@@ -96,9 +98,29 @@ Initialize the Moda SDK.
 - `endpoint` (str): Custom ingest endpoint
 - `enabled` (bool): Enable/disable instrumentation
 
+### `moda.conversation_id`
+
+Property to get/set conversation ID (recommended).
+
+```python
+moda.conversation_id = "conv-123"  # set
+print(moda.conversation_id)        # get
+moda.conversation_id = None        # clear
+```
+
+### `moda.user_id`
+
+Property to get/set user ID.
+
+```python
+moda.user_id = "user-456"  # set
+print(moda.user_id)        # get
+moda.user_id = None        # clear
+```
+
 ### `moda.set_conversation_id(id)`
 
-Context manager to set explicit conversation ID.
+Context manager to set scoped conversation ID.
 
 ```python
 with moda.set_conversation_id("conv-123"):
@@ -107,7 +129,7 @@ with moda.set_conversation_id("conv-123"):
 
 ### `moda.set_user_id(id)`
 
-Context manager to set user ID for attribution.
+Context manager to set scoped user ID.
 
 ```python
 with moda.set_user_id("user-456"):
