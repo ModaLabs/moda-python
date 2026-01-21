@@ -7,7 +7,7 @@ on:
 jobs:
   publish-moda:
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: pypi-moda
     permissions:
       id-token: write
     steps:
@@ -32,7 +32,7 @@ jobs:
 
   publish-moda-openai:
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: pypi-openai
     permissions:
       id-token: write
     steps:
@@ -57,7 +57,7 @@ jobs:
 
   publish-moda-anthropic:
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: pypi-anthropic
     permissions:
       id-token: write
     steps:
