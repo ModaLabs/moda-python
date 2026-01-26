@@ -20,7 +20,7 @@ import sys
 from types import ModuleType
 from typing import Optional
 
-from traceloop.sdk import Moda
+from traceloop.sdk import Instruments, Moda
 from traceloop.sdk.context import (
     set_conversation_id,
     set_user_id,
@@ -138,5 +138,6 @@ __all__ = [
     "get_conversation_id",
     "get_user_id",
     "compute_conversation_id",
+    "Instruments",
     "Moda",
 ]
