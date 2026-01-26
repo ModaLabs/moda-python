@@ -183,3 +183,6 @@ chroma.sqlite3
 
 # Development files
 packages/sample-app/sample_app/development/
+
+# VCR test cassettes
+**/tests/cassettes/
