@@ -84,7 +84,7 @@ This works for simple use cases but explicit IDs are recommended for production.
 | Variable | Description |
 |----------|-------------|
 | `MODA_API_KEY` | Your Moda API key |
-| `MODA_BASE_URL` | Custom endpoint (default: `https://ingest.moda.so/v1/traces`) |
+| `MODA_BASE_URL` | Custom endpoint (default: `https://moda-ingest.modas.workers.dev/v1/traces`) |
 
 ## API Reference
 
