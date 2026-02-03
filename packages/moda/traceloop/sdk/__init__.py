@@ -74,7 +74,7 @@ __all__ = [
 ]
 
 # Default Moda endpoint
-DEFAULT_ENDPOINT = "https://ingest.moda.so/v1/traces"
+DEFAULT_ENDPOINT = "https://moda-ingest.modas.workers.dev/v1/traces"
 
 
 class Moda:
@@ -118,7 +118,7 @@ class Moda:
         Args:
             api_key: Your Moda API key (or set MODA_API_KEY env var).
             app_name: Name of your application for identification.
-            api_endpoint: Moda ingest endpoint (default: https://ingest.moda.so/v1/traces).
+            api_endpoint: Moda ingest endpoint (default: https://moda-ingest.modas.workers.dev/v1/traces).
             enabled: Whether to enable instrumentation.
             headers: Additional headers for the exporter.
             disable_batch: If True, send spans immediately instead of batching.
