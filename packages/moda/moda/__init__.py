@@ -33,6 +33,12 @@ from traceloop.sdk.conversation import (
     get_user_id,
 )
 
+# Vapi integration
+from moda.vapi import (
+    process_vapi_end_of_call_report,
+    is_end_of_call_report,
+)
+
 # Module-level instance for convenience
 _moda_instance: Moda | None = None
 
@@ -42,6 +48,7 @@ def init(
     app_name: str | None = None,
     endpoint: str | None = None,
     exporter=None,
+    debug: bool = False,
     **kwargs,
 ):
     """Initialize Moda SDK.
@@ -51,17 +58,42 @@ def init(
         app_name: Optional name for your application.
         endpoint: Custom ingest endpoint. Defaults to Moda's ingest endpoint.
         exporter: Custom OpenTelemetry exporter (for testing/debugging).
+        debug: Enable debug mode - disables batching, enables verbose logging.
         **kwargs: Additional arguments passed to Moda.init()
     """
+    import logging
+
+    if debug:
+        # Enable verbose logging for debugging
+        logging.basicConfig(level=logging.DEBUG)
+        logging.getLogger("opentelemetry").setLevel(logging.DEBUG)
+        logging.getLogger("opentelemetry.exporter").setLevel(logging.DEBUG)
+        logging.getLogger("urllib3").setLevel(logging.DEBUG)
+
+        # Disable batching so spans are sent immediately
+        kwargs["disable_batch"] = True
+
+        print(f"[Moda Debug] Initializing with endpoint: {endpoint or 'default'}")
+        print(f"[Moda Debug] API key: {api_key[:10]}..." if api_key else "[Moda Debug] No API key provided")
+
     global _moda_instance
     _moda_instance = Moda()
-    _moda_instance.init(
-        api_key=api_key,
-        app_name=app_name,
-        api_endpoint=endpoint,
-        exporter=exporter,
+
+    # Only pass api_endpoint if explicitly provided (don't override default with None)
+    init_kwargs = {
+        "api_key": api_key,
+        "exporter": exporter,
         **kwargs,
-    )
+    }
+    if app_name is not None:
+        init_kwargs["app_name"] = app_name
+    if endpoint is not None:
+        init_kwargs["api_endpoint"] = endpoint
+
+    _moda_instance.init(**init_kwargs)
+
+    if debug:
+        print("[Moda Debug] Initialization complete")
 
 
 def flush():
@@ -140,4 +172,7 @@ __all__ = [
     "compute_conversation_id",
     "Instruments",
     "Moda",
+    # Vapi integration
+    "process_vapi_end_of_call_report",
+    "is_end_of_call_report",
 ]
