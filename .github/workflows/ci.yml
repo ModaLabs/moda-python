@@ -53,7 +53,15 @@ jobs:
         with:
           node-version: 18
 
-      - uses: nrwl/nx-set-shas@v4
+      - name: Set Nx SHAs
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "NX_BASE=${{ github.event.pull_request.base.sha }}" >> $GITHUB_ENV
+            echo "NX_HEAD=${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
+          else
+            echo "NX_BASE=${{ github.event.before }}" >> $GITHUB_ENV
+            echo "NX_HEAD=${{ github.sha }}" >> $GITHUB_ENV
+          fi
       - run: npm ci --cache ~/.npm --prefer-offline
       - name: Clean npm cache
         run: npm cache clean --force || true
@@ -92,7 +100,15 @@ jobs:
         with:
           node-version: 18
 
-      - uses: nrwl/nx-set-shas@v4
+      - name: Set Nx SHAs
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "NX_BASE=${{ github.event.pull_request.base.sha }}" >> $GITHUB_ENV
+            echo "NX_HEAD=${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
+          else
+            echo "NX_BASE=${{ github.event.before }}" >> $GITHUB_ENV
+            echo "NX_HEAD=${{ github.sha }}" >> $GITHUB_ENV
+          fi
 
       - run: npm ci --cache ~/.npm --prefer-offline
       - name: Clean npm cache
@@ -145,7 +161,15 @@ jobs:
         with:
           node-version: 18
 
-      - uses: nrwl/nx-set-shas@v4
+      - name: Set Nx SHAs
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "NX_BASE=${{ github.event.pull_request.base.sha }}" >> $GITHUB_ENV
+            echo "NX_HEAD=${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
+          else
+            echo "NX_BASE=${{ github.event.before }}" >> $GITHUB_ENV
+            echo "NX_HEAD=${{ github.sha }}" >> $GITHUB_ENV
+          fi
 
       - run: npm ci --cache ~/.npm --prefer-offline
       - name: Clean npm cache
