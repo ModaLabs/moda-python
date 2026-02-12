@@ -25,7 +25,12 @@ real_payload = {
             "duration": 155.5,
             "cost": 0.045,
         },
-        "summary": "Customer called regarding an issue with their iPhone 13 Pro Max restarting randomly. They have already tried force restarting but the issue persists. Advised them to update to iOS 17.4. Scheduled a Genius Bar appointment for tomorrow at 2 PM.",
+        "summary": (
+            "Customer called regarding an issue with their iPhone 13 Pro Max"
+            " restarting randomly. They have already tried force restarting"
+            " but the issue persists. Advised them to update to iOS 17.4."
+            " Scheduled a Genius Bar appointment for tomorrow at 2 PM."
+        ),
         "structuredData": {
             "issue_type": "hardware_failure",
             "device_model": "iPhone 13 Pro Max",
@@ -92,7 +97,10 @@ print(f"  payload.message has 'structuredData'? {inner_payload.get('structuredDa
 print()
 print("ISSUES FOUND:")
 print("  1. Real payload wraps everything in 'message' - integration expects top-level 'type'/'call'")
-print("  2. Transcript is at payload.message.transcript (with 'message' field), not payload.call.artifact.messages (with 'content' field)")
+print(
+    "  2. Transcript is at payload.message.transcript (with 'message' field),"
+    " not payload.call.artifact.messages (with 'content' field)"
+)
 print("  3. Real payload has 'summary' and 'structuredData' - integration ignores these")
 print("  4. Real payload.call has no 'artifact', 'customer', or 'costs' breakdown")
 print("  5. Real payload has 'assistantId' and 'status' - integration doesn't capture these")
