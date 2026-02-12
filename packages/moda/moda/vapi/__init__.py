@@ -14,7 +14,11 @@ Example:
 """
 
 from moda.vapi.types import (
+    VapiAnalysis,
     VapiEndOfCallReport,
+    VapiMessagePayload,
+    VapiRealWebhookPayload,
+    VapiTranscriptEntry,
     VapiWebhookPayload,
     VapiCall,
     VapiCallArtifact,
@@ -32,6 +36,8 @@ from moda.vapi.types import (
 )
 
 from moda.vapi.parser import (
+    normalize_payload,
+    extract_analysis,
     extract_turns,
     extract_tool_calls,
     extract_transfers,
@@ -48,8 +54,14 @@ __all__ = [
     # Main functions
     "process_vapi_end_of_call_report",
     "is_end_of_call_report",
+    "normalize_payload",
+    "extract_analysis",
     # Types
+    "VapiAnalysis",
     "VapiEndOfCallReport",
+    "VapiMessagePayload",
+    "VapiRealWebhookPayload",
+    "VapiTranscriptEntry",
     "VapiWebhookPayload",
     "VapiCall",
     "VapiCallArtifact",

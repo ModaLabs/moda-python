@@ -3,7 +3,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from opentelemetry.trace import StatusCode
 
 from moda.vapi.spans import (
     process_vapi_end_of_call_report,
@@ -14,8 +13,10 @@ from tests.vapi.fixtures import (
     SAMPLE_PAYLOAD,
     MINIMAL_PAYLOAD,
     PAYLOAD_NO_ARTIFACT,
-    PAYLOAD_EMPTY_MESSAGES,
     STATUS_UPDATE_PAYLOAD,
+    REAL_WEBHOOK_PAYLOAD,
+    REAL_WEBHOOK_TRANSCRIPT_ARRAY,
+    REAL_WEBHOOK_WITH_ARTIFACT,
 )
 
 
@@ -229,3 +230,162 @@ class TestVapiSpanCreation:
 
         for span in mock_tracer_with_span_tracking["spans"]:
             span.end.assert_called()
+
+
+class TestIsEndOfCallReportRealFormat:
+    """Tests for is_end_of_call_report with real VAPI format."""
+
+    def test_returns_true_for_message_wrapped_payload(self):
+        """Should return True for message-wrapped end-of-call-report."""
+        assert is_end_of_call_report(REAL_WEBHOOK_PAYLOAD) is True
+
+    def test_returns_false_for_message_wrapped_non_end_of_call(self):
+        """Should return False for message-wrapped non-end-of-call type."""
+        payload = {
+            "message": {
+                "type": "status-update",
+                "call": {"id": "test"},
+            },
+        }
+        assert is_end_of_call_report(payload) is False
+
+    def test_returns_false_for_message_without_call(self):
+        """Should return False when message has no call data."""
+        payload = {
+            "message": {
+                "type": "end-of-call-report",
+            },
+        }
+        assert is_end_of_call_report(payload) is False
+
+
+class TestProcessRealWebhookPayload:
+    """Tests for processing real VAPI webhook payloads."""
+
+    @pytest.fixture
+    def mock_tracer_with_span_tracking(self):
+        """Create a mock tracer that tracks created spans."""
+        created_spans = []
+
+        def create_mock_span(name, **kwargs):
+            span = MagicMock()
+            span.name = name
+            span.set_attribute = MagicMock()
+            span.set_status = MagicMock()
+            span.end = MagicMock()
+            created_spans.append(span)
+            return span
+
+        mock_tracer = MagicMock()
+        mock_tracer.start_span.side_effect = create_mock_span
+
+        with patch("moda.vapi.spans.trace") as mock_trace:
+            mock_trace.get_tracer.return_value = mock_tracer
+            mock_trace.set_span_in_context.return_value = MagicMock()
+            yield {
+                "trace": mock_trace,
+                "tracer": mock_tracer,
+                "spans": created_spans,
+            }
+
+    def test_creates_spans_from_real_webhook_payload(self, mock_tracer_with_span_tracking):
+        """Should create spans from a real message-wrapped payload."""
+        process_vapi_end_of_call_report(REAL_WEBHOOK_PAYLOAD)
+
+        span_names = [s.name for s in mock_tracer_with_span_tracking["spans"]]
+        assert "vapi.call" in span_names
+
+    def test_creates_turn_spans_from_transcript_array(self, mock_tracer_with_span_tracking):
+        """Should create turn spans from transcript array with {role, message} entries."""
+        process_vapi_end_of_call_report(REAL_WEBHOOK_TRANSCRIPT_ARRAY)
+
+        span_names = [s.name for s in mock_tracer_with_span_tracking["spans"]]
+        turn_spans = [n for n in span_names if n.startswith("vapi.turn.")]
+
+        # 2 assistant messages in the transcript -> 2 turn spans
+        assert len(turn_spans) == 2
+        assert "vapi.turn.0" in turn_spans
+        assert "vapi.turn.1" in turn_spans
+
+    def test_sets_analysis_attributes_on_parent_span(self, mock_tracer_with_span_tracking):
+        """Should set analysis attributes on the parent call span."""
+        process_vapi_end_of_call_report(REAL_WEBHOOK_PAYLOAD)
+
+        parent_span = mock_tracer_with_span_tracking["spans"][0]
+
+        parent_span.set_attribute.assert_any_call(
+            "vapi.analysis.summary",
+            "Customer asked about billing. Issue resolved.",
+        )
+        parent_span.set_attribute.assert_any_call(
+            "vapi.analysis.success_evaluation", "true"
+        )
+
+    def test_sets_structured_data_as_json_string(self, mock_tracer_with_span_tracking):
+        """Should set structured data as a JSON string attribute."""
+        process_vapi_end_of_call_report(REAL_WEBHOOK_PAYLOAD)
+
+        parent_span = mock_tracer_with_span_tracking["spans"][0]
+
+        # Find the structured_data call
+        structured_data_calls = [
+            call
+            for call in parent_span.set_attribute.call_args_list
+            if call[0][0] == "vapi.analysis.structured_data"
+        ]
+        assert len(structured_data_calls) == 1
+        import json
+
+        data = json.loads(structured_data_calls[0][0][1])
+        assert data["intent"] == "billing_inquiry"
+        assert data["resolved"] is True
+
+    def test_sets_assistant_id_attribute(self, mock_tracer_with_span_tracking):
+        """Should set assistant_id attribute on parent span."""
+        process_vapi_end_of_call_report(REAL_WEBHOOK_PAYLOAD)
+
+        parent_span = mock_tracer_with_span_tracking["spans"][0]
+        parent_span.set_attribute.assert_any_call(
+            "vapi.call.assistant_id", "asst_456"
+        )
+
+    def test_sets_call_status_attribute(self, mock_tracer_with_span_tracking):
+        """Should set call status attribute on parent span."""
+        process_vapi_end_of_call_report(REAL_WEBHOOK_PAYLOAD)
+
+        parent_span = mock_tracer_with_span_tracking["spans"][0]
+        parent_span.set_attribute.assert_any_call("vapi.call.status", "ended")
+
+    def test_sets_timing_attributes(self, mock_tracer_with_span_tracking):
+        """Should set started_at and ended_at attributes."""
+        process_vapi_end_of_call_report(REAL_WEBHOOK_PAYLOAD)
+
+        parent_span = mock_tracer_with_span_tracking["spans"][0]
+        parent_span.set_attribute.assert_any_call(
+            "vapi.call.started_at", "2024-01-15T10:30:00Z"
+        )
+        parent_span.set_attribute.assert_any_call(
+            "vapi.call.ended_at", "2024-01-15T10:32:35Z"
+        )
+
+    def test_prefers_artifact_messages_over_transcript(self, mock_tracer_with_span_tracking):
+        """Should use artifact messages when both artifact and transcript exist."""
+        process_vapi_end_of_call_report(REAL_WEBHOOK_WITH_ARTIFACT)
+
+        span_names = [s.name for s in mock_tracer_with_span_tracking["spans"]]
+        turn_spans = [n for n in span_names if n.startswith("vapi.turn.")]
+        tool_spans = [n for n in span_names if n.startswith("vapi.tool.")]
+
+        # Should have 3 assistant turns from artifact (not 1 from transcript)
+        assert len(turn_spans) == 3
+        # Should have tool call from artifact
+        assert "vapi.tool.checkAvailability" in tool_spans
+
+    def test_backward_compatible_with_legacy_format(self, mock_tracer_with_span_tracking):
+        """Should still work with the legacy payload format."""
+        process_vapi_end_of_call_report(SAMPLE_PAYLOAD)
+
+        span_names = [s.name for s in mock_tracer_with_span_tracking["spans"]]
+        assert "vapi.call" in span_names
+        turn_spans = [n for n in span_names if n.startswith("vapi.turn.")]
+        assert len(turn_spans) == 4

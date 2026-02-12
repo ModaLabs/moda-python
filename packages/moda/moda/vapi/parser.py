@@ -1,8 +1,9 @@
 """Parsing functions for extracting data from Vapi end-of-call reports."""
 
-from typing import Optional
+from typing import Any, Optional
 
 from moda.vapi.types import (
+    VapiAnalysis,
     VapiCallArtifact,
     VapiMessage,
     VapiCost,
@@ -11,6 +12,91 @@ from moda.vapi.types import (
     ExtractedTurn,
     ExtractedToolCall,
 )
+
+
+def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a VAPI webhook payload to the format the existing parser expects.
+
+    Handles both the real VAPI format (wrapped in a `message` object) and the
+    legacy format (top-level `type` and `call`). This ensures backward compatibility.
+
+    Args:
+        payload: The raw webhook payload (either format).
+
+    Returns:
+        A normalized payload with top-level `type` and `call` keys.
+    """
+    # Check if the payload is wrapped in a `message` object
+    message = payload.get("message")
+    if isinstance(message, dict) and message.get("type"):
+        unwrapped = message
+    else:
+        # Already in the expected format (or unknown format)
+        unwrapped = payload
+
+    call: dict[str, Any] = unwrapped.get("call") or {}
+
+    # Ensure artifact exists on the call
+    artifact = call.get("artifact") or {}
+
+    # If artifact has no messages, try to convert transcript entries
+    if not artifact.get("messages"):
+        transcript = unwrapped.get("transcript")
+        if isinstance(transcript, list):
+            # Convert {role, message} entries to {role, content} format
+            converted_messages: list[dict[str, Any]] = []
+            for entry in transcript:
+                if isinstance(entry, dict) and entry.get("role"):
+                    converted: dict[str, Any] = {"role": entry["role"]}
+                    # Real VAPI format uses "message", convert to "content"
+                    if "message" in entry:
+                        converted["content"] = entry["message"]
+                    elif "content" in entry:
+                        converted["content"] = entry["content"]
+                    converted_messages.append(converted)
+            if converted_messages:
+                artifact["messages"] = converted_messages
+                call["artifact"] = artifact
+
+    # Merge analysis from call.analysis or from message-level fields
+    if not call.get("analysis"):
+        analysis: dict[str, Any] = {}
+        # Check message-level summary/structuredData
+        if unwrapped.get("summary"):
+            analysis["summary"] = unwrapped["summary"]
+        if unwrapped.get("structuredData"):
+            analysis["structuredData"] = unwrapped["structuredData"]
+        if analysis:
+            call["analysis"] = analysis
+
+    # Merge timing fields from message level to call level
+    if not call.get("startedAt") and unwrapped.get("startedAt"):
+        call["startedAt"] = unwrapped["startedAt"]
+    if not call.get("endedAt") and unwrapped.get("endedAt"):
+        call["endedAt"] = unwrapped["endedAt"]
+
+    # Build normalized payload
+    normalized: dict[str, Any] = {
+        "type": unwrapped.get("type", payload.get("type")),
+        "call": call,
+    }
+
+    return normalized
+
+
+def extract_analysis(call: dict[str, Any]) -> Optional[VapiAnalysis]:
+    """Extract analysis data from a call object.
+
+    Args:
+        call: The Vapi call data.
+
+    Returns:
+        Analysis data if present, None otherwise.
+    """
+    analysis = call.get("analysis")
+    if not analysis:
+        return None
+    return analysis
 
 
 def extract_turns(artifact: Optional[VapiCallArtifact]) -> list[ExtractedTurn]:
