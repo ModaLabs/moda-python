@@ -3,7 +3,8 @@
 Creates OpenTelemetry spans with proper parent-child relationships.
 """
 
-from typing import Optional
+import json
+from typing import Any, Optional
 
 from opentelemetry import trace
 from opentelemetry.trace import Span, SpanKind, StatusCode
@@ -21,14 +22,19 @@ from moda.vapi.parser import (
     extract_tool_calls,
     extract_transfers,
     extract_costs,
+    extract_analysis,
+    normalize_payload,
 )
 
 TRACER_NAME = "moda-sdk"
 TRACER_VERSION = "0.1.0"
 
 
-def is_end_of_call_report(payload: VapiWebhookPayload) -> bool:
+def is_end_of_call_report(payload: dict[str, Any]) -> bool:
     """Type guard to check if a webhook payload is an end-of-call report.
+
+    Handles both the legacy format (top-level type/call) and the real VAPI
+    format (wrapped in a message object).
 
     Args:
         payload: The webhook payload to check.
@@ -36,7 +42,17 @@ def is_end_of_call_report(payload: VapiWebhookPayload) -> bool:
     Returns:
         True if the payload is an end-of-call report with call data.
     """
-    return payload.get("type") == "end-of-call-report" and payload.get("call") is not None
+    # Check legacy format: top-level type and call
+    if payload.get("type") == "end-of-call-report" and payload.get("call") is not None:
+        return True
+
+    # Check real VAPI format: message.type and message.call
+    message = payload.get("message")
+    if isinstance(message, dict):
+        if message.get("type") == "end-of-call-report" and message.get("call") is not None:
+            return True
+
+    return False
 
 
 def _create_call_span(
@@ -86,10 +102,39 @@ def _create_call_span(
     if call.get("cost") is not None:
         span.set_attribute("vapi.call.cost", call["cost"])
 
+    # Set assistant ID
+    if call.get("assistantId"):
+        span.set_attribute("vapi.call.assistant_id", call["assistantId"])
+
+    # Set call status
+    if call.get("status"):
+        span.set_attribute("vapi.call.status", call["status"])
+
+    # Set timing fields
+    if call.get("startedAt"):
+        span.set_attribute("vapi.call.started_at", call["startedAt"])
+    if call.get("endedAt"):
+        span.set_attribute("vapi.call.ended_at", call["endedAt"])
+
     # Add cost breakdown attributes
     costs = extract_costs(call.get("costs"))
     for cost_type, amount in costs.items():
         span.set_attribute(f"vapi.cost.{cost_type}", amount)
+
+    # Add analysis attributes
+    analysis = extract_analysis(call)
+    if analysis:
+        if analysis.get("summary"):
+            span.set_attribute("vapi.analysis.summary", analysis["summary"])
+        if analysis.get("structuredData"):
+            span.set_attribute(
+                "vapi.analysis.structured_data",
+                json.dumps(analysis["structuredData"]),
+            )
+        if analysis.get("successEvaluation"):
+            span.set_attribute(
+                "vapi.analysis.success_evaluation", analysis["successEvaluation"]
+            )
 
     return span
 
@@ -276,7 +321,7 @@ def _create_all_spans(
 
 
 def process_vapi_end_of_call_report(
-    payload: VapiWebhookPayload,
+    payload: dict[str, Any],
     options: Optional[ProcessVapiOptions] = None,
 ) -> None:
     """Process a Vapi end-of-call report webhook and create OpenTelemetry spans.
@@ -287,12 +332,15 @@ def process_vapi_end_of_call_report(
     - Child spans for each tool execution (`vapi.tool.{name}`)
     - Child spans for squad transfers (`vapi.transfer`)
 
+    Handles both the real VAPI format (wrapped in a `message` object) and the
+    legacy format (top-level `type` and `call`).
+
     The function returns early without creating spans if:
     - The webhook type is not "end-of-call-report"
     - The call data is missing
 
     Args:
-        payload: The Vapi webhook payload.
+        payload: The Vapi webhook payload (either real or legacy format).
         options: Optional configuration with conversation_id and user_id overrides.
 
     Returns:
@@ -323,7 +371,10 @@ def process_vapi_end_of_call_report(
     if not is_end_of_call_report(payload):
         return
 
-    call = payload["call"]
+    # Normalize the payload to handle both real and legacy formats
+    normalized = normalize_payload(payload)
+
+    call = normalized["call"]
 
     # Create all spans (parent + children)
     parent_span, _ = _create_all_spans(call, options)

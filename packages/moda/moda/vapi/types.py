@@ -131,8 +131,14 @@ class VapiCallArtifact(TypedDict, total=False):
     messages: list[VapiMessage]
     """Full conversation message history."""
 
+    messagesOpenAIFormatted: list[dict[str, Any]]
+    """Messages in OpenAI format."""
+
     nodes: list[VapiNode]
     """Workflow nodes (for squad/workflow calls)."""
+
+    variables: dict[str, Any]
+    """Variables set during the call."""
 
     transfers: list[VapiTransfer]
     """Squad transfer records."""
@@ -158,11 +164,40 @@ class VapiCostWithDetails(VapiCost, total=False):
     """Additional details."""
 
 
+class VapiAnalysis(TypedDict, total=False):
+    """Analysis data from Vapi call."""
+
+    summary: str
+    """Summary of the call."""
+
+    structuredData: dict[str, Any]
+    """Structured data extracted from the call."""
+
+    successEvaluation: str
+    """Success evaluation result."""
+
+
+class VapiTranscriptEntry(TypedDict, total=False):
+    """Transcript entry in the real VAPI format (uses 'message' not 'content')."""
+
+    role: str
+    """Role of the speaker."""
+
+    message: str
+    """Message content (real VAPI format uses 'message' instead of 'content')."""
+
+
 class VapiCall(TypedDict, total=False):
     """Vapi call object containing all call data."""
 
     id: str
     """Unique call identifier."""
+
+    assistantId: str
+    """Assistant identifier."""
+
+    status: str
+    """Call status (e.g., 'ended')."""
 
     duration: float
     """Call duration in seconds."""
@@ -173,11 +208,20 @@ class VapiCall(TypedDict, total=False):
     cost: float
     """Total cost of the call."""
 
+    startedAt: str
+    """ISO timestamp when the call started."""
+
+    endedAt: str
+    """ISO timestamp when the call ended."""
+
     customer: VapiCustomer
     """Customer information."""
 
     artifact: VapiCallArtifact
     """Call artifact containing messages, transfers, and metrics."""
+
+    analysis: VapiAnalysis
+    """Analysis data from the call."""
 
     costs: list[VapiCost]
     """Cost breakdown by component."""
@@ -201,6 +245,56 @@ class VapiEndOfCallReport(TypedDict):
 
     call: VapiCall
     """The call data."""
+
+
+class VapiMessagePayload(TypedDict, total=False):
+    """The real VAPI message object (inside the webhook wrapper)."""
+
+    type: str
+    """Type of webhook event (e.g., 'end-of-call-report')."""
+
+    call: VapiCall
+    """The call data."""
+
+    transcript: Any
+    """Transcript as string or list of {role, message} entries."""
+
+    summary: str
+    """Call summary."""
+
+    structuredData: dict[str, Any]
+    """Structured data extracted from the call."""
+
+    analysis: VapiAnalysis
+    """Analysis data."""
+
+    artifact: VapiCallArtifact
+    """Call artifact."""
+
+    startedAt: str
+    """ISO timestamp when the call started."""
+
+    endedAt: str
+    """ISO timestamp when the call ended."""
+
+    cost: float
+    """Total cost of the call."""
+
+    recordingUrl: str
+    """URL to the call recording."""
+
+    stereoRecordingUrl: str
+    """URL to the stereo call recording."""
+
+    compliance: dict[str, Any]
+    """Compliance data."""
+
+
+class VapiRealWebhookPayload(TypedDict, total=False):
+    """Real VAPI webhook payload with message wrapper."""
+
+    message: VapiMessagePayload
+    """The message object wrapping the actual payload."""
 
 
 class ExtractedTurn(TypedDict, total=False):
