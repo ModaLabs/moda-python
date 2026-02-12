@@ -3,7 +3,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from opentelemetry.trace import StatusCode
 
 from moda.vapi.spans import (
     process_vapi_end_of_call_report,
@@ -14,7 +13,6 @@ from tests.vapi.fixtures import (
     SAMPLE_PAYLOAD,
     MINIMAL_PAYLOAD,
     PAYLOAD_NO_ARTIFACT,
-    PAYLOAD_EMPTY_MESSAGES,
     STATUS_UPDATE_PAYLOAD,
     REAL_WEBHOOK_PAYLOAD,
     REAL_WEBHOOK_TRANSCRIPT_ARRAY,

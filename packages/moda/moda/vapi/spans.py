@@ -11,7 +11,6 @@ from opentelemetry.trace import Span, SpanKind, StatusCode
 
 from moda.vapi.types import (
     VapiCall,
-    VapiWebhookPayload,
     VapiTransfer,
     ProcessVapiOptions,
     ExtractedTurn,

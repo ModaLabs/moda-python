@@ -1,6 +1,5 @@
 """Parsing functions for extracting data from Vapi end-of-call reports."""
 
-import json
 from typing import Any, Optional
 
 from moda.vapi.types import (
