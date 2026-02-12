@@ -1,12 +1,14 @@
 """End-to-end test of VAPI integration with real webhook payload."""
 
+import os
+
 import moda
 from moda.vapi.spans import is_end_of_call_report, process_vapi_end_of_call_report
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 
 # Initialize Moda with console exporter so we can see what spans get created
 moda.init(
-    api_key="REDACTED_API_KEY",
+    api_key=os.environ.get("MODA_API_KEY", "test"),
     app_name="vapi-e2e-test",
     exporter=ConsoleSpanExporter(),
 )
