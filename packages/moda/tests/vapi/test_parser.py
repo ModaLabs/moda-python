@@ -3,6 +3,8 @@
 import pytest
 
 from moda.vapi.parser import (
+    normalize_payload,
+    extract_analysis,
     extract_turns,
     extract_tool_calls,
     extract_transfers,
@@ -15,6 +17,10 @@ from tests.vapi.fixtures import (
     SAMPLE_PAYLOAD,
     ARTIFACT_NO_TOOLS,
     ARTIFACT_NO_TRANSFERS,
+    REAL_WEBHOOK_PAYLOAD,
+    REAL_WEBHOOK_TRANSCRIPT_ARRAY,
+    REAL_WEBHOOK_TRANSCRIPT_STRING,
+    REAL_WEBHOOK_WITH_ARTIFACT,
 )
 
 
@@ -159,3 +165,118 @@ class TestGetTurnTiming:
         """Should return None for out of bounds index."""
         timing = get_turn_timing(SAMPLE_PAYLOAD["call"]["artifact"], 100)
         assert timing is None
+
+
+class TestNormalizePayload:
+    """Tests for normalize_payload function."""
+
+    def test_unwraps_message_wrapped_payload(self):
+        """Should unwrap a message-wrapped payload."""
+        normalized = normalize_payload(REAL_WEBHOOK_PAYLOAD)
+
+        assert normalized["type"] == "end-of-call-report"
+        assert normalized["call"]["id"] == "call_real_123"
+
+    def test_passes_through_legacy_payload(self):
+        """Should pass through an already-unwrapped legacy payload."""
+        normalized = normalize_payload(SAMPLE_PAYLOAD)
+
+        assert normalized["type"] == "end-of-call-report"
+        assert normalized["call"]["id"] == "call_abc123"
+        # Original artifact messages should be preserved
+        assert len(normalized["call"]["artifact"]["messages"]) == 8
+
+    def test_converts_transcript_role_message_to_role_content(self):
+        """Should convert {role, message} transcript entries to {role, content}."""
+        normalized = normalize_payload(REAL_WEBHOOK_TRANSCRIPT_ARRAY)
+
+        messages = normalized["call"]["artifact"]["messages"]
+        assert len(messages) == 4
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "Hello"
+        assert messages[1]["role"] == "assistant"
+        assert messages[1]["content"] == "Hi there! How can I help?"
+
+    def test_does_not_override_existing_artifact_messages(self):
+        """Should not override existing artifact messages with transcript."""
+        normalized = normalize_payload(REAL_WEBHOOK_WITH_ARTIFACT)
+
+        messages = normalized["call"]["artifact"]["messages"]
+        # Should keep the original 6 artifact messages, not the 2 transcript entries
+        assert len(messages) == 6
+        assert messages[0]["content"] == "I need to book an appointment"
+
+    def test_merges_analysis_from_message_level(self):
+        """Should merge analysis from message-level summary/structuredData."""
+        payload = {
+            "message": {
+                "type": "end-of-call-report",
+                "call": {"id": "call_no_analysis"},
+                "summary": "Test summary",
+                "structuredData": {"key": "value"},
+            },
+        }
+        normalized = normalize_payload(payload)
+
+        assert normalized["call"]["analysis"]["summary"] == "Test summary"
+        assert normalized["call"]["analysis"]["structuredData"] == {"key": "value"}
+
+    def test_preserves_call_level_analysis_over_message_level(self):
+        """Should preserve call-level analysis when it exists."""
+        normalized = normalize_payload(REAL_WEBHOOK_PAYLOAD)
+
+        analysis = normalized["call"]["analysis"]
+        assert analysis["summary"] == "Customer asked about billing. Issue resolved."
+        assert analysis["successEvaluation"] == "true"
+
+    def test_merges_timing_fields_from_message_level(self):
+        """Should merge startedAt/endedAt from message level to call level."""
+        normalized = normalize_payload(REAL_WEBHOOK_TRANSCRIPT_ARRAY)
+
+        assert normalized["call"]["startedAt"] == "2024-01-15T14:00:00Z"
+        assert normalized["call"]["endedAt"] == "2024-01-15T14:01:00Z"
+
+    def test_handles_string_transcript_gracefully(self):
+        """Should handle string transcript without converting to messages."""
+        normalized = normalize_payload(REAL_WEBHOOK_TRANSCRIPT_STRING)
+
+        # String transcript should not produce artifact messages
+        artifact = normalized["call"].get("artifact", {})
+        assert not artifact.get("messages")
+
+    def test_handles_empty_payload(self):
+        """Should handle empty/minimal payload gracefully."""
+        normalized = normalize_payload({})
+
+        assert normalized["call"] == {}
+
+
+class TestExtractAnalysis:
+    """Tests for extract_analysis function."""
+
+    def test_extracts_analysis_from_call(self):
+        """Should extract analysis from call object."""
+        call = {
+            "id": "test",
+            "analysis": {
+                "summary": "Test summary",
+                "structuredData": {"key": "value"},
+                "successEvaluation": "true",
+            },
+        }
+        analysis = extract_analysis(call)
+
+        assert analysis is not None
+        assert analysis["summary"] == "Test summary"
+        assert analysis["structuredData"] == {"key": "value"}
+        assert analysis["successEvaluation"] == "true"
+
+    def test_returns_none_when_no_analysis(self):
+        """Should return None when no analysis data."""
+        analysis = extract_analysis({"id": "test"})
+        assert analysis is None
+
+    def test_returns_none_for_empty_analysis(self):
+        """Should return None for empty analysis dict."""
+        analysis = extract_analysis({"id": "test", "analysis": {}})
+        assert analysis is None
