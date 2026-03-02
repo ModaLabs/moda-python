@@ -215,7 +215,10 @@ async def _aset_token_usage(
         cache_read_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
         cache_creation_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
     else:
+        # Token usage is mandatory - must count tokens if not provided by API
         prompt_tokens = await acount_prompt_tokens_from_request(anthropic, request)
+        if prompt_tokens is None or prompt_tokens < 0:
+            raise ValueError("Failed to count input tokens for Anthropic request. Token tracking is mandatory.")
         cache_read_tokens = 0
         cache_creation_tokens = 0
 
@@ -233,6 +236,7 @@ async def _aset_token_usage(
     if usage:
         completion_tokens = getattr(usage, "output_tokens", 0)
     else:
+        # Token usage is mandatory - must count tokens if not provided by API
         completion_tokens = 0
         if hasattr(anthropic, "count_tokens"):
             completion_attr = getattr(response, "completion", None)
@@ -243,6 +247,9 @@ async def _aset_token_usage(
                 completion_tokens = await anthropic.count_tokens(
                     content_attr[0].text
                 )
+
+        if completion_tokens is None or completion_tokens <= 0:
+            raise ValueError("Failed to count output tokens for Anthropic response. Token tracking is mandatory.")
 
     if (
         token_histogram
@@ -329,7 +336,10 @@ def _set_token_usage(
         cache_read_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
         cache_creation_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
     else:
+        # Token usage is mandatory - must count tokens if not provided by API
         prompt_tokens = count_prompt_tokens_from_request(anthropic, request)
+        if prompt_tokens is None or prompt_tokens < 0:
+            raise ValueError("Failed to count input tokens for Anthropic request. Token tracking is mandatory.")
         cache_read_tokens = 0
         cache_creation_tokens = 0
 
@@ -347,6 +357,7 @@ def _set_token_usage(
     if usage:
         completion_tokens = getattr(usage, "output_tokens", 0)
     else:
+        # Token usage is mandatory - must count tokens if not provided by API
         completion_tokens = 0
         if hasattr(anthropic, "count_tokens"):
             completion_attr = getattr(response, "completion", None)
@@ -357,6 +368,9 @@ def _set_token_usage(
                 completion_tokens = anthropic.count_tokens(
                     content_attr[0].text
                 )
+
+        if completion_tokens is None or completion_tokens <= 0:
+            raise ValueError("Failed to count output tokens for Anthropic response. Token tracking is mandatory.")
 
     if (
         token_histogram
