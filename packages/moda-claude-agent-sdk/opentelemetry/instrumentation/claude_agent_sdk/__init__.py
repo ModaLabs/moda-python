@@ -140,9 +140,12 @@ def _wrap_receive_response(tracer):
         async_gen = wrapped(*args, **kwargs)
         stream = WrappedAgentStream(async_gen, instance, span)
 
-        # Yield through — this makes our wrapper an async generator too
-        async for msg in stream:
-            yield msg
+        # Yield through — try/finally ensures span is finalized on early exit (break, cancel)
+        try:
+            async for msg in stream:
+                yield msg
+        finally:
+            stream._finalize()
 
     return wrapper
 

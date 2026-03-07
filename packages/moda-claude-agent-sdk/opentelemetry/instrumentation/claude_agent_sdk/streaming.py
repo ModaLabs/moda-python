@@ -65,6 +65,12 @@ class WrappedAgentStream:
         self._process_message(msg)
         return msg
 
+    async def aclose(self):
+        """Finalize span when consumer exits the loop early (break, cancel, etc.)."""
+        self._finalize()
+        if hasattr(self._async_gen, 'aclose'):
+            await self._async_gen.aclose()
+
     def _process_message(self, msg):
         """Extract data from each message yielded by the agent stream."""
         try:
@@ -178,9 +184,8 @@ class WrappedAgentStream:
             else:
                 self._span.set_status(Status(StatusCode.OK))
 
-            # Model
+            # Model — only update response model; request model was set upfront
             if self._model:
-                _set_span_attribute(self._span, "gen_ai.request.model", self._model)
                 _set_span_attribute(self._span, "gen_ai.response.model", self._model)
 
             # Token usage

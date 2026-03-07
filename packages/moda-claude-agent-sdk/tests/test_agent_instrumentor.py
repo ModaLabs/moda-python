@@ -394,6 +394,28 @@ async def test_multiple_sequential_agent_runs(instrumentor, span_exporter):
         assert span.attributes.get("claude_agent.session_id") == f"sess-{i}"
 
 
+async def test_early_break_finalizes_span(instrumentor, span_exporter):
+    """Breaking out of the stream early should still finalize the span."""
+    import asyncio
+
+    client = _make_client([
+        StreamEvent("message_start", input_tokens=100),
+        AssistantMessage(text_blocks=1),
+        StreamEvent("message_delta", output_tokens=50),
+        ResultMessage(num_turns=1, session_id="sess-break"),
+    ])
+
+    await client.query("Break early")
+    gen = client.receive_response()
+    async for msg in gen:
+        break  # exit after first message
+    # Explicitly close the async generator to ensure cleanup runs
+    await gen.aclose()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1  # span must be finalized even with early break
+
+
 # ---------------------------------------------------------------------------
 # Real SDK behavior tests (no StreamEvent, tokens from ResultMessage.usage)
 # ---------------------------------------------------------------------------
