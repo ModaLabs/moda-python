@@ -144,10 +144,6 @@ class WrappedAgentStream:
                         block_text = getattr(block, "text", None)
                         if isinstance(block_text, str) and block_text:
                             text_chunks.append(block_text)
-                elif block_type == "TextBlock":
-                    block_text = getattr(block, "text", None)
-                    if isinstance(block_text, str) and block_text:
-                        text_chunks.append(block_text)
 
             if text_chunks:
                 self._last_completion_text = "".join(text_chunks)
