@@ -91,9 +91,7 @@ jobs:
 
       - name: Build moda-claude-agent-sdk
         working-directory: packages/moda-claude-agent-sdk
-        run: |
-          chmod +x ../../scripts/build-release.sh
-          ../../scripts/build-release.sh
+        run: uv build
 
       - name: Publish moda-claude-agent-sdk to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
