@@ -7,6 +7,7 @@ class Instruments(Enum):
     ANTHROPIC = "anthropic"
     BEDROCK = "bedrock"
     CHROMA = "chroma"
+    CLAUDE_AGENT_SDK = "claude_agent_sdk"
     COHERE = "cohere"
     CREWAI = "crewai"
     CREW = "crewai"  # deprecated alias; remove in future major version

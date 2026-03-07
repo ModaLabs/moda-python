@@ -487,6 +487,9 @@ def init_instrumentations(
         elif instrument == Instruments.CHROMA:
             if init_chroma_instrumentor():
                 instrument_set = True
+        elif instrument == Instruments.CLAUDE_AGENT_SDK:
+            if init_claude_agent_sdk_instrumentor():
+                instrument_set = True
         elif instrument == Instruments.COHERE:
             if init_cohere_instrumentor():
                 instrument_set = True
@@ -1107,6 +1110,22 @@ def init_openai_agents_instrumentor():
             return True
     except Exception as e:
         logging.error(f"Error initializing OpenAI Agents instrumentor: {e}")
+    return False
+
+
+def init_claude_agent_sdk_instrumentor():
+    try:
+        if is_package_installed("claude-agent-sdk"):
+            from opentelemetry.instrumentation.claude_agent_sdk import (
+                ClaudeAgentSDKInstrumentor,
+            )
+
+            instrumentor = ClaudeAgentSDKInstrumentor()
+            if not instrumentor.is_instrumented_by_opentelemetry:
+                instrumentor.instrument()
+            return True
+    except Exception as e:
+        logging.error(f"Error initializing Claude Agent SDK instrumentor: {e}")
     return False
 
 
