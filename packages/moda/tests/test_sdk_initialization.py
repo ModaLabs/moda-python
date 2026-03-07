@@ -104,7 +104,11 @@ def test_default_moda_endpoint_disables_metrics_without_override(monkeypatch):
     monkeypatch.delenv("TRACELOOP_METRICS_ENDPOINT", raising=False)
     monkeypatch.setenv("TRACELOOP_METRICS_ENABLED", "true")
 
-    with patch("traceloop.sdk.TracerWrapper"), patch("traceloop.sdk.Client"), patch("traceloop.sdk.MetricsWrapper") as metrics_wrapper:
+    with (
+        patch("traceloop.sdk.TracerWrapper"),
+        patch("traceloop.sdk.Client"),
+        patch("traceloop.sdk.MetricsWrapper") as metrics_wrapper,
+    ):
         Traceloop.init(api_key="moda_test_key", app_name="test_default_metrics_disable")
         metrics_wrapper.set_static_params.assert_not_called()
         metrics_wrapper.assert_not_called()
@@ -117,7 +121,11 @@ def test_default_moda_endpoint_uses_explicit_metrics_endpoint(monkeypatch):
     monkeypatch.setenv("TRACELOOP_METRICS_ENABLED", "true")
     monkeypatch.setenv("MODA_METRICS_ENDPOINT", "https://collector.example.com")
 
-    with patch("traceloop.sdk.TracerWrapper"), patch("traceloop.sdk.Client"), patch("traceloop.sdk.MetricsWrapper") as metrics_wrapper:
+    with (
+        patch("traceloop.sdk.TracerWrapper"),
+        patch("traceloop.sdk.Client"),
+        patch("traceloop.sdk.MetricsWrapper") as metrics_wrapper,
+    ):
         Traceloop.init(api_key="moda_test_key", app_name="test_explicit_metrics_endpoint")
         metrics_wrapper.set_static_params.assert_called_once()
         metrics_endpoint = metrics_wrapper.set_static_params.call_args.args[1]
