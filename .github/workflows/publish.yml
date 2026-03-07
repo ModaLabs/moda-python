@@ -74,3 +74,28 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/moda-anthropic/dist/
+
+  publish-moda-claude-agent-sdk:
+    runs-on: ubuntu-latest
+    environment: pypi-claude-agent-sdk
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh && echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build moda-claude-agent-sdk
+        working-directory: packages/moda-claude-agent-sdk
+        run: |
+          chmod +x ../../scripts/build-release.sh
+          ../../scripts/build-release.sh
+
+      - name: Publish moda-claude-agent-sdk to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/moda-claude-agent-sdk/dist/
