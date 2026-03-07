@@ -17,8 +17,6 @@ import sys
 import types
 import uuid
 import json
-from unittest.mock import MagicMock
-
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -277,8 +275,6 @@ async def test_runner_e2e(instrumentor, span_exporter):
     """Replicate the client's runner script flow end-to-end."""
 
     # --- Config (normally from JSON file) ---
-    chat_id = f"chat_{uuid.uuid4().hex[:12]}"
-    moda_user_id = "user-pranav-test"
     prompt = "What's the latest news about AI?"
     model = "claude-sonnet-4-20250514"
 
@@ -299,7 +295,6 @@ async def test_runner_e2e(instrumentor, span_exporter):
     text_id = None
     text_streamed = False
     tool_id = None
-    tool_name = None
     tool_input_buffer = ""
     block_type = None
     final_session_id = ""
@@ -335,7 +330,7 @@ async def test_runner_e2e(instrumentor, span_exporter):
 
                     elif cb_type == "tool_use":
                         tool_id = cb.get("id")
-                        tool_name = cb.get("name")
+                        _ = cb.get("name")  # tool_name tracked by runner
                         block_type = "tool_use"
                         tool_input_buffer = ""
 
@@ -360,11 +355,10 @@ async def test_runner_e2e(instrumentor, span_exporter):
 
                     elif block_type == "tool_use" and tool_id:
                         try:
-                            parsed_input = json.loads(tool_input_buffer) if tool_input_buffer else {}
+                            json.loads(tool_input_buffer) if tool_input_buffer else {}
                         except json.JSONDecodeError:
-                            parsed_input = {"raw": tool_input_buffer}
+                            pass
                         tool_id = None
-                        tool_name = None
                         tool_input_buffer = ""
                         block_type = None
 

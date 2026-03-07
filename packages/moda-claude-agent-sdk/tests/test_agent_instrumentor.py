@@ -396,7 +396,6 @@ async def test_multiple_sequential_agent_runs(instrumentor, span_exporter):
 
 async def test_early_break_finalizes_span(instrumentor, span_exporter):
     """Breaking out of the stream early should still finalize the span."""
-    import asyncio
 
     client = _make_client([
         StreamEvent("message_start", input_tokens=100),
