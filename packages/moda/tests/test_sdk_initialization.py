@@ -54,6 +54,77 @@ class TestInitSpansExporter:
             mock.assert_called_once_with(endpoint=expected_endpoint, headers={}, insecure=insecure)
 
 
+class TestInitMetricsExporter:
+    """Tests for metrics endpoint normalization."""
+
+    @pytest.mark.parametrize("endpoint,expected_endpoint", [
+        ("http://localhost:4318", "http://localhost:4318/v1/metrics"),
+        ("http://localhost:4318/", "http://localhost:4318/v1/metrics"),
+        ("http://localhost:4318/v1/traces", "http://localhost:4318/v1/metrics"),
+        ("http://localhost:4318/v1/metrics", "http://localhost:4318/v1/metrics"),
+        ("http://localhost:4318/v1/logs", "http://localhost:4318/v1/metrics"),
+        ("https://api.example.com/collector", "https://api.example.com/collector/v1/metrics"),
+        ("  http://localhost:4318/v1/traces  ", "http://localhost:4318/v1/metrics"),
+    ])
+    def test_http_endpoint_construction(self, endpoint, expected_endpoint):
+        from traceloop.sdk.metrics.metrics import init_metrics_exporter
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+
+        with patch.object(OTLPMetricExporter, "__init__", return_value=None) as mock:
+            init_metrics_exporter(endpoint, {})
+            mock.assert_called_once_with(endpoint=expected_endpoint, headers={})
+
+
+class TestInitLoggingExporter:
+    """Tests for logging endpoint normalization."""
+
+    @pytest.mark.parametrize("endpoint,expected_endpoint", [
+        ("http://localhost:4318", "http://localhost:4318/v1/logs"),
+        ("http://localhost:4318/", "http://localhost:4318/v1/logs"),
+        ("http://localhost:4318/v1/traces", "http://localhost:4318/v1/logs"),
+        ("http://localhost:4318/v1/metrics", "http://localhost:4318/v1/logs"),
+        ("http://localhost:4318/v1/logs", "http://localhost:4318/v1/logs"),
+        ("https://api.example.com/collector", "https://api.example.com/collector/v1/logs"),
+        ("  http://localhost:4318/v1/traces  ", "http://localhost:4318/v1/logs"),
+    ])
+    def test_http_endpoint_construction(self, endpoint, expected_endpoint):
+        from traceloop.sdk.logging.logging import init_logging_exporter
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+
+        with patch.object(OTLPLogExporter, "__init__", return_value=None) as mock:
+            init_logging_exporter(endpoint, {})
+            mock.assert_called_once_with(endpoint=expected_endpoint, headers={})
+
+
+def test_default_moda_endpoint_disables_metrics_without_override(monkeypatch):
+    """Default Moda ingest endpoint only accepts traces; metrics should be disabled unless explicitly configured."""
+    from traceloop.sdk import Traceloop
+
+    monkeypatch.delenv("MODA_METRICS_ENDPOINT", raising=False)
+    monkeypatch.delenv("TRACELOOP_METRICS_ENDPOINT", raising=False)
+    monkeypatch.setenv("TRACELOOP_METRICS_ENABLED", "true")
+
+    with patch("traceloop.sdk.TracerWrapper"), patch("traceloop.sdk.Client"), patch("traceloop.sdk.MetricsWrapper") as metrics_wrapper:
+        Traceloop.init(api_key="moda_test_key", app_name="test_default_metrics_disable")
+        metrics_wrapper.set_static_params.assert_not_called()
+        metrics_wrapper.assert_not_called()
+
+
+def test_default_moda_endpoint_uses_explicit_metrics_endpoint(monkeypatch):
+    """An explicit metrics endpoint should re-enable metrics pipeline initialization."""
+    from traceloop.sdk import Traceloop
+
+    monkeypatch.setenv("TRACELOOP_METRICS_ENABLED", "true")
+    monkeypatch.setenv("MODA_METRICS_ENDPOINT", "https://collector.example.com")
+
+    with patch("traceloop.sdk.TracerWrapper"), patch("traceloop.sdk.Client"), patch("traceloop.sdk.MetricsWrapper") as metrics_wrapper:
+        Traceloop.init(api_key="moda_test_key", app_name="test_explicit_metrics_endpoint")
+        metrics_wrapper.set_static_params.assert_called_once()
+        metrics_endpoint = metrics_wrapper.set_static_params.call_args.args[1]
+        assert metrics_endpoint == "https://collector.example.com"
+        metrics_wrapper.assert_called_once()
+
+
 @pytest.mark.vcr
 def test_resource_attributes(exporter, openai_client):
     openai_client.chat.completions.create(

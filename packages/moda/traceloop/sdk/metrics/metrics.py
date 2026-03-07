@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from typing import Dict, Optional, Any
+from urllib.parse import urlparse
 
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
     OTLPMetricExporter as GRPCExporter,
@@ -59,10 +60,28 @@ class MetricsWrapper(object):
 
 
 def init_metrics_exporter(endpoint: str, headers: Dict[str, str]) -> MetricExporter:
-    if "http" in endpoint.lower() or "https" in endpoint.lower():
-        return HTTPExporter(endpoint=f"{endpoint}/v1/metrics", headers=headers)
+    parsed = urlparse(endpoint.strip())
+    if parsed.scheme.lower() in {"http", "https"}:
+        return HTTPExporter(
+            endpoint=_normalize_http_signal_endpoint(endpoint, "metrics"),
+            headers=headers,
+        )
     else:
-        return GRPCExporter(endpoint=endpoint, headers=headers)
+        return GRPCExporter(endpoint=endpoint.strip(), headers=headers)
+
+
+def _normalize_http_signal_endpoint(endpoint: str, signal: str) -> str:
+    """Normalize HTTP OTLP endpoints to avoid double-appending /v1/<signal>."""
+    parsed = urlparse(endpoint.strip().rstrip("/"))
+    path = parsed.path.rstrip("/")
+
+    for suffix in ("/v1/traces", "/v1/metrics", "/v1/logs"):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)]
+            break
+
+    normalized_path = f"{path}/v1/{signal}" if path else f"/v1/{signal}"
+    return parsed._replace(path=normalized_path).geturl()
 
 
 def init_metrics_provider(

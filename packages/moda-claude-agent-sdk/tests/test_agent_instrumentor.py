@@ -295,6 +295,8 @@ async def test_prompt_captured_from_query(instrumentor, span_exporter):
     spans = span_exporter.get_finished_spans()
     span = spans[0]
     assert span.attributes.get("gen_ai.prompt") == "Explain quantum computing"
+    assert span.attributes.get("llm.prompts.0.role") == "user"
+    assert span.attributes.get("llm.prompts.0.content") == "Explain quantum computing"
 
 
 async def test_dict_style_stream_events(instrumentor, span_exporter):
@@ -442,7 +444,7 @@ async def test_real_sdk_behavior_tokens_from_result_message(instrumentor, span_e
     client = _make_client([
         RealAssistantMessage(
             model="claude-sonnet-4-20250514",
-            content=[MagicMock(type="text")],
+            content=[MagicMock(type="text", text="Hello from assistant")],
         ),
         RealResultMessage(
             num_turns=1,
@@ -469,6 +471,8 @@ async def test_real_sdk_behavior_tokens_from_result_message(instrumentor, span_e
     assert span.attributes.get("gen_ai.usage.output_tokens") == 91
     assert span.attributes.get("llm.usage.total_tokens") == 2053
     assert span.attributes.get("gen_ai.response.model") == "claude-sonnet-4-20250514"
+    assert span.attributes.get("llm.completions.0.role") == "assistant"
+    assert span.attributes.get("llm.completions.0.content") == "Hello from assistant"
     assert span.attributes.get("claude_agent.num_turns") == 1
     assert span.attributes.get("claude_agent.session_id") == "sess-real-001"
 

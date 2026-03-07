@@ -48,6 +48,7 @@ class WrappedAgentStream:
         self._num_turns = None
         self._session_id = None
         self._model = None
+        self._last_completion_text = None
 
     def __aiter__(self):
         return self
@@ -130,6 +131,7 @@ class WrappedAgentStream:
             return
 
         if isinstance(content, list):
+            text_chunks = []
             for block in content:
                 block_type = type(block).__name__
                 if block_type == "ToolUseBlock":
@@ -138,6 +140,17 @@ class WrappedAgentStream:
                     attr_type = getattr(block, "type", None)
                     if attr_type == "tool_use":
                         self._tool_call_count += 1
+                    elif attr_type == "text":
+                        block_text = getattr(block, "text", None)
+                        if isinstance(block_text, str) and block_text:
+                            text_chunks.append(block_text)
+                elif block_type == "TextBlock":
+                    block_text = getattr(block, "text", None)
+                    if isinstance(block_text, str) and block_text:
+                        text_chunks.append(block_text)
+
+            if text_chunks:
+                self._last_completion_text = "".join(text_chunks)
 
     def _handle_stream_event(self, msg):
         """Extract token usage from raw Anthropic streaming events.
@@ -194,6 +207,14 @@ class WrappedAgentStream:
             _set_span_attribute(
                 self._span, "llm.usage.total_tokens", self._input_tokens + self._output_tokens
             )
+            if self._last_completion_text:
+                # Emit OpenLLMetry-style completion fields so Moda ingest parser can extract assistant rows.
+                _set_span_attribute(self._span, "llm.completions.0.role", "assistant")
+                _set_span_attribute(
+                    self._span,
+                    "llm.completions.0.content",
+                    self._last_completion_text[:8000],
+                )
 
             # Agent-specific attributes
             _set_span_attribute(self._span, "claude_agent.num_turns", self._num_turns)

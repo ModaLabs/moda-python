@@ -232,13 +232,25 @@ class Moda:
         metrics_disabled_by_config = not is_metrics_enabled()
         has_custom_spans_pipeline = processor or exporter
         custom_trace_without_custom_metrics = has_custom_spans_pipeline and not metrics_exporter
+        explicit_metrics_endpoint = (
+            os.getenv("MODA_METRICS_ENDPOINT")
+            or os.getenv("TRACELOOP_METRICS_ENDPOINT")
+        )
+        metrics_disabled_for_default_trace_endpoint = (
+            api_endpoint.strip().rstrip("/") == DEFAULT_ENDPOINT.rstrip("/")
+            and not explicit_metrics_endpoint
+            and not metrics_exporter
+        )
 
-        if metrics_disabled_by_config or custom_trace_without_custom_metrics:
+        if (
+            metrics_disabled_by_config
+            or custom_trace_without_custom_metrics
+            or metrics_disabled_for_default_trace_endpoint
+        ):
             print(Fore.YELLOW + "Metrics are disabled" + Fore.RESET)
         else:
             metrics_endpoint = (
-                os.getenv("MODA_METRICS_ENDPOINT")
-                or os.getenv("TRACELOOP_METRICS_ENDPOINT")
+                explicit_metrics_endpoint
                 or api_endpoint
             )
             metrics_headers = (
