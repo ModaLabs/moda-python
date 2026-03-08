@@ -59,6 +59,36 @@ client.chat.completions.create(...)
 moda.user_id = None  # clear
 ```
 
+## OpenClaw Integration
+
+OpenClaw can export OpenTelemetry data via its `diagnostics-otel` plugin.
+Moda provides helpers to generate OpenClaw config/env and trace OpenClaw runtime operations.
+
+```python
+import moda
+from moda.openclaw import (
+    get_openclaw_otel_config,
+    get_openclaw_env,
+    run_openclaw_cli,
+)
+
+moda.init("YOUR_MODA_API_KEY")
+
+config = get_openclaw_otel_config(service_name="openclaw-gateway")
+env = get_openclaw_env()
+
+# Optional traced CLI invocation
+result = run_openclaw_cli(["--help"], check=False)
+
+# If OpenClaw is not installed globally, run via npx:
+result = run_openclaw_cli(
+    ["agent", "--help"],
+    command_prefix=["npx", "-y", "openclaw@latest"],
+    check=False,
+)
+print(result.returncode)
+```
+
 ## Automatic Fallback
 
 If you don't set a conversation ID, the SDK automatically computes one from the first user message and system prompt. This works for simple use cases but explicit IDs are recommended for production.

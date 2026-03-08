@@ -32,6 +32,12 @@ from traceloop.sdk.conversation import (
     get_conversation_id,
     get_user_id,
 )
+from moda.openclaw import (
+    get_openclaw_env,
+    get_openclaw_otel_config,
+    run_openclaw_cli,
+    trace_openclaw_operation,
+)
 
 # Vapi integration
 from moda.vapi import (
@@ -170,6 +176,10 @@ __all__ = [
     "get_conversation_id",
     "get_user_id",
     "compute_conversation_id",
+    "get_openclaw_otel_config",
+    "get_openclaw_env",
+    "trace_openclaw_operation",
+    "run_openclaw_cli",
     "Instruments",
     "Moda",
     # Vapi integration
