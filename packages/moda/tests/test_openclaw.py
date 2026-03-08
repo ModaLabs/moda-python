@@ -5,6 +5,7 @@ import subprocess
 
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
+import pytest
 
 from traceloop.sdk.openclaw import (
     get_openclaw_env,
@@ -142,3 +143,28 @@ def test_trace_openclaw_operation_falls_back_when_moda_not_initialized(monkeypat
         pass
 
     assert tracer.spans[0].name == "openclaw.gateway.request"
+
+
+def test_trace_openclaw_operation_propagates_inner_errors(monkeypatch):
+    tracer = _FakeTracer()
+
+    @contextmanager
+    def _fake_get_tracer():
+        yield tracer
+
+    monkeypatch.setattr("traceloop.sdk.openclaw.get_tracer", _fake_get_tracer)
+
+    with pytest.raises(ValueError, match="boom"):
+        with trace_openclaw_operation("gateway.request"):
+            raise ValueError("boom")
+
+    span = tracer.spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert isinstance(span.exceptions[0], ValueError)
+    assert span.ended is True
+
+
+def test_sdk_exports_run_openclaw_cli():
+    import traceloop.sdk as sdk
+
+    assert callable(sdk.run_openclaw_cli)

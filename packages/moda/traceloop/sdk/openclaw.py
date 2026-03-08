@@ -49,13 +49,29 @@ def _encode_otel_headers(headers: Mapping[str, str]) -> str:
 
 @contextmanager
 def _openclaw_tracer():
+    fallback_tracer = trace.get_tracer("moda.openclaw")
     try:
-        with get_tracer() as moda_tracer:
-            yield moda_tracer
-            return
+        tracer_context = get_tracer()
     except Exception:
         # Fallback for callers that use OpenClaw helpers before moda.init().
-        yield trace.get_tracer("moda.openclaw")
+        yield fallback_tracer
+        return
+
+    try:
+        moda_tracer = tracer_context.__enter__()
+    except Exception:
+        # Fallback when entering the Moda tracer context fails.
+        yield fallback_tracer
+        return
+
+    try:
+        yield moda_tracer
+    except BaseException as exc:
+        suppress = tracer_context.__exit__(type(exc), exc, exc.__traceback__)
+        if not suppress:
+            raise
+    else:
+        tracer_context.__exit__(None, None, None)
 
 
 def get_openclaw_otel_config(

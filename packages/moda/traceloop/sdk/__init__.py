@@ -508,5 +508,13 @@ def get_openclaw_env(
     )
 
 
+def run_openclaw_cli(
+    args: List[str],
+    **kwargs,
+) -> object:
+    """Run OpenClaw CLI with Moda OTEL env and tracing span."""
+    return Moda.run_openclaw_cli(args, **kwargs)
+
+
 # Keep backward compatibility with Traceloop
 Traceloop = Moda
