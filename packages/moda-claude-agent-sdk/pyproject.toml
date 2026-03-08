@@ -1,6 +1,6 @@
 [project]
 name = "moda-claude-agent-sdk"
-version = "0.1.1"
+version = "0.1.2"
 description = "Moda Claude Agent SDK instrumentation for LLM observability"
 authors = [
   { name = "Moda Labs", email = "support@moda.so" },

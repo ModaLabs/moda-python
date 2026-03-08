@@ -48,8 +48,12 @@ class WrappedAgentStream:
         self._num_turns = None
         self._session_id = None
         self._model = None
-        self._completion_candidates = []
+        # Keep completion candidates with turn/source metadata so we can dedupe
+        # only stream+assistant duplicates within the same turn.
+        self._completion_entries = []
         self._stream_text_buffer = []
+        self._turn_counter = 0
+        self._current_turn_id = None
 
     def __aiter__(self):
         return self
@@ -93,13 +97,38 @@ class WrappedAgentStream:
         except Exception as e:
             logger.debug(f"Error processing agent message: {e}")
 
-    def _add_completion_candidate(self, completion_text: str):
-        if isinstance(completion_text, str) and completion_text.strip():
-            self._completion_candidates.append(completion_text)
+    def _next_turn_id(self):
+        self._turn_counter += 1
+        self._current_turn_id = self._turn_counter
+        return self._current_turn_id
+
+    def _get_or_create_turn_id(self):
+        if self._current_turn_id is None:
+            return self._next_turn_id()
+        return self._current_turn_id
+
+    def _add_completion_candidate(self, completion_text: str, source: str):
+        if not isinstance(completion_text, str) or not completion_text.strip():
+            return
+
+        turn_id = self._get_or_create_turn_id()
+        normalized = completion_text.strip()
+
+        # Dedupe only within the same turn and only across different sources
+        # (stream vs assistant). Identical completions across turns must survive.
+        for existing_turn, existing_source, existing_text in self._completion_entries:
+            if existing_turn != turn_id:
+                continue
+            if existing_source == source:
+                continue
+            if existing_text.strip() == normalized:
+                return
+
+        self._completion_entries.append((turn_id, source, completion_text))
 
     def _flush_stream_text_buffer(self):
         if self._stream_text_buffer:
-            self._add_completion_candidate("".join(self._stream_text_buffer))
+            self._add_completion_candidate("".join(self._stream_text_buffer), source="stream")
             self._stream_text_buffer = []
 
     def _handle_result_message(self, msg):
@@ -156,7 +185,7 @@ class WrappedAgentStream:
                             text_chunks.append(block_text)
 
             if text_chunks:
-                self._add_completion_candidate("".join(text_chunks))
+                self._add_completion_candidate("".join(text_chunks), source="assistant")
 
     def _handle_stream_event(self, msg):
         """Extract token usage from raw Anthropic streaming events.
@@ -174,6 +203,7 @@ class WrappedAgentStream:
         if event_type == "message_start":
             # Start of a new model message; flush any text from the previous one.
             self._flush_stream_text_buffer()
+            self._next_turn_id()
             message = _get(event, "message")
             if message:
                 usage = _get(message, "usage")
@@ -228,19 +258,9 @@ class WrappedAgentStream:
             _set_span_attribute(
                 self._span, "llm.usage.total_tokens", self._input_tokens + self._output_tokens
             )
-            # Deduplicate adjacent duplicates (e.g., same completion observed in both stream and assistant events).
-            deduped_completions = []
-            for candidate in self._completion_candidates:
-                if not deduped_completions:
-                    deduped_completions.append(candidate)
-                    continue
-                if deduped_completions[-1].strip() == candidate.strip():
-                    continue
-                deduped_completions.append(candidate)
-
-            if deduped_completions:
+            if self._completion_entries:
                 # Emit indexed OpenLLMetry-style completions for multi-turn agent runs.
-                for index, completion_text in enumerate(deduped_completions):
+                for index, (_, _, completion_text) in enumerate(self._completion_entries):
                     _set_span_attribute(self._span, f"llm.completions.{index}.role", "assistant")
                     _set_span_attribute(
                         self._span,

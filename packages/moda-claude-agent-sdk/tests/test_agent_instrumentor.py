@@ -454,6 +454,62 @@ async def test_dedupes_adjacent_stream_and_assistant_completion_text(instrumento
     assert span.attributes.get("llm.completions.1.content") is None
 
 
+async def test_identical_completions_across_turns_are_preserved(instrumentor, span_exporter):
+    """Two turns with identical completion text should emit two completion entries."""
+
+    class DictStreamEvent:
+        def __init__(self, event_dict):
+            self.event = event_dict
+
+    class RealAssistantMessage:
+        def __init__(self, model=None, content=None):
+            self.model = model
+            self.content = content or []
+
+    duplicate_text = "I don't understand"
+    client = _make_client([
+        DictStreamEvent({
+            "type": "message_start",
+            "message": {"usage": {"input_tokens": 100}, "model": "claude-sonnet-4-20250514"},
+        }),
+        DictStreamEvent({
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": duplicate_text},
+        }),
+        DictStreamEvent({"type": "message_stop"}),
+        RealAssistantMessage(
+            model="claude-sonnet-4-20250514",
+            content=[MagicMock(type="text", text=duplicate_text)],
+        ),
+        DictStreamEvent({
+            "type": "message_start",
+            "message": {"usage": {"input_tokens": 100}, "model": "claude-sonnet-4-20250514"},
+        }),
+        DictStreamEvent({
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": duplicate_text},
+        }),
+        DictStreamEvent({"type": "message_stop"}),
+        RealAssistantMessage(
+            model="claude-sonnet-4-20250514",
+            content=[MagicMock(type="text", text=duplicate_text)],
+        ),
+        ResultMessage(num_turns=2, session_id="sess-identical-turns"),
+    ])
+
+    await client.query("Same completion across turns")
+    async for _ in client.receive_response():
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    span = spans[0]
+    assert span.attributes.get("llm.completions.0.content") == duplicate_text
+    assert span.attributes.get("llm.completions.1.content") == duplicate_text
+    assert span.attributes.get("llm.completions.2.content") is None
+
+
 async def test_uninstrument_removes_wrapping(tracer_provider, span_exporter):
     """After uninstrument(), calls should not create spans."""
 
