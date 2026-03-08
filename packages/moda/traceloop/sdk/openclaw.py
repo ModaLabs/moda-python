@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from typing import Dict, Iterator, Mapping, Optional, Sequence, Union
 
 from opentelemetry import trace
-from opentelemetry.trace import Status, StatusCode, Span
+from opentelemetry.trace import Status, StatusCode, Span, Tracer
 
 from traceloop.sdk.conversation import get_conversation_id, get_user_id
 from traceloop.sdk.tracing.context_manager import get_tracer
@@ -48,7 +48,7 @@ def _encode_otel_headers(headers: Mapping[str, str]) -> str:
 
 
 @contextmanager
-def _openclaw_tracer():
+def _openclaw_tracer() -> Iterator[Tracer]:
     fallback_tracer = trace.get_tracer("moda.openclaw")
     try:
         tracer_context = get_tracer()
@@ -138,7 +138,7 @@ def get_openclaw_env(
         additional_headers=additional_headers,
     )
     otel = config["diagnostics"]["otel"]  # type: ignore[index]
-    headers = otel["headers"]  # type: ignore[index]
+    headers = otel["headers"]
 
     env = {
         "OTEL_EXPORTER_OTLP_ENDPOINT": str(otel["endpoint"]),
