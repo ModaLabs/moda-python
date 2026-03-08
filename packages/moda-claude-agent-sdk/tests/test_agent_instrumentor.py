@@ -193,6 +193,37 @@ async def test_multi_turn_agent_run(instrumentor, span_exporter):
     assert span.attributes.get("claude_agent.tool_call_count") == 3  # 1 + 2
 
 
+async def test_multi_turn_emits_indexed_completion_attributes(instrumentor, span_exporter):
+    """Assistant messages with text should be emitted as indexed llm.completions.N.* attributes."""
+
+    class RealAssistantMessage:
+        def __init__(self, model=None, content=None):
+            self.model = model
+            self.content = content or []
+
+    client = _make_client([
+        RealAssistantMessage(
+            model="claude-sonnet-4-20250514",
+            content=[MagicMock(type="text", text="First answer")],
+        ),
+        RealAssistantMessage(content=[MagicMock(type="text", text="Second answer")]),
+        ResultMessage(num_turns=2, session_id="sess-completions"),
+    ])
+
+    await client.query("Give two answers")
+    async for _ in client.receive_response():
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    span = spans[0]
+    assert span.attributes.get("llm.completions.0.role") == "assistant"
+    assert span.attributes.get("llm.completions.0.content") == "First answer"
+    assert span.attributes.get("llm.completions.1.role") == "assistant"
+    assert span.attributes.get("llm.completions.1.content") == "Second answer"
+
+
 async def test_tool_call_counting(instrumentor, span_exporter):
     """Tool calls across multiple assistant messages should be counted."""
 

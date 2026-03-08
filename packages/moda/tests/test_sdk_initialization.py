@@ -64,6 +64,10 @@ class TestInitMetricsExporter:
         ("http://localhost:4318/v1/metrics", "http://localhost:4318/v1/metrics"),
         ("http://localhost:4318/v1/logs", "http://localhost:4318/v1/metrics"),
         ("https://api.example.com/collector", "https://api.example.com/collector/v1/metrics"),
+        (
+            "https://api.example.com/v1/traces?debug=1/",
+            "https://api.example.com/v1/metrics?debug=1/",
+        ),
         ("  http://localhost:4318/v1/traces  ", "http://localhost:4318/v1/metrics"),
     ])
     def test_http_endpoint_construction(self, endpoint, expected_endpoint):
@@ -85,6 +89,10 @@ class TestInitLoggingExporter:
         ("http://localhost:4318/v1/metrics", "http://localhost:4318/v1/logs"),
         ("http://localhost:4318/v1/logs", "http://localhost:4318/v1/logs"),
         ("https://api.example.com/collector", "https://api.example.com/collector/v1/logs"),
+        (
+            "https://api.example.com/v1/traces?debug=1/",
+            "https://api.example.com/v1/logs?debug=1/",
+        ),
         ("  http://localhost:4318/v1/traces  ", "http://localhost:4318/v1/logs"),
     ])
     def test_http_endpoint_construction(self, endpoint, expected_endpoint):
