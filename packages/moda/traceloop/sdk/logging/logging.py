@@ -1,5 +1,6 @@
 import logging
 from typing import Dict, Optional, Any, cast
+from urllib.parse import urlparse
 
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
     OTLPLogExporter as GRPCExporter,
@@ -12,6 +13,7 @@ from opentelemetry.sdk._logs.export import LogExporter, BatchLogRecordProcessor
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
+from traceloop.sdk.utils.otlp import normalize_http_signal_endpoint
 
 
 class LoggerWrapper(object):
@@ -51,10 +53,17 @@ class LoggerWrapper(object):
 
 
 def init_logging_exporter(endpoint: str, headers: Dict[str, str]) -> LogExporter:
-    if "http" in endpoint.lower() or "https" in endpoint.lower():
-        return cast(LogExporter, HTTPExporter(endpoint=f"{endpoint}/v1/logs", headers=headers))
+    parsed = urlparse(endpoint.strip())
+    if parsed.scheme.lower() in {"http", "https"}:
+        return cast(
+            LogExporter,
+            HTTPExporter(
+                endpoint=normalize_http_signal_endpoint(endpoint, "logs"),
+                headers=headers,
+            ),
+        )
     else:
-        return cast(LogExporter, GRPCExporter(endpoint=endpoint, headers=headers))
+        return cast(LogExporter, GRPCExporter(endpoint=endpoint.strip(), headers=headers))
 
 
 def init_logging_provider(

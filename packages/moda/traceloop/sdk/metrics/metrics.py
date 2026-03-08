@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from typing import Dict, Optional, Any
+from urllib.parse import urlparse
 
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
     OTLPMetricExporter as GRPCExporter,
@@ -17,6 +18,7 @@ from opentelemetry.sdk.metrics.view import View, ExplicitBucketHistogramAggregat
 from opentelemetry.sdk.resources import Resource
 
 from opentelemetry import metrics
+from traceloop.sdk.utils.otlp import normalize_http_signal_endpoint
 
 
 class MetricsWrapper(object):
@@ -59,10 +61,14 @@ class MetricsWrapper(object):
 
 
 def init_metrics_exporter(endpoint: str, headers: Dict[str, str]) -> MetricExporter:
-    if "http" in endpoint.lower() or "https" in endpoint.lower():
-        return HTTPExporter(endpoint=f"{endpoint}/v1/metrics", headers=headers)
+    parsed = urlparse(endpoint.strip())
+    if parsed.scheme.lower() in {"http", "https"}:
+        return HTTPExporter(
+            endpoint=normalize_http_signal_endpoint(endpoint, "metrics"),
+            headers=headers,
+        )
     else:
-        return GRPCExporter(endpoint=endpoint, headers=headers)
+        return GRPCExporter(endpoint=endpoint.strip(), headers=headers)
 
 
 def init_metrics_provider(

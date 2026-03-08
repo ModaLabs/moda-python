@@ -390,6 +390,12 @@ async def test_runner_e2e(instrumentor, span_exporter):
     assert span.attributes["gen_ai.system"] == "Anthropic"
     assert span.attributes["llm.request_type"] == "chat"
     assert span.attributes["gen_ai.request.model"] == "claude-sonnet-4-20250514"
+    assert span.attributes["llm.prompts.0.role"] == "user"
+    assert span.attributes["llm.prompts.0.content"] == "What's the latest news about AI?"
+    assert span.attributes["llm.completions.0.role"] == "assistant"
+    assert span.attributes["llm.completions.0.content"].startswith("Let me search")
+    assert span.attributes["llm.completions.1.role"] == "assistant"
+    assert span.attributes["llm.completions.1.content"].startswith("Based on my search")
 
     # Token usage — summed across both turns
     assert span.attributes["gen_ai.usage.input_tokens"] == 3000  # 1200 + 1800
