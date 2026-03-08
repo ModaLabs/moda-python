@@ -42,6 +42,12 @@ from traceloop.sdk.tracing.tracing import (
 )
 from traceloop.sdk.client.client import Client
 from traceloop.sdk.associations.associations import AssociationProperty as AssociationProperty
+from traceloop.sdk.openclaw import (
+    get_openclaw_env as _get_openclaw_env,
+    get_openclaw_otel_config as _get_openclaw_otel_config,
+    run_openclaw_cli as _run_openclaw_cli,
+    trace_openclaw_operation,
+)
 
 # Import conversation and context modules
 from traceloop.sdk.context import (
@@ -71,6 +77,10 @@ __all__ = [
     "set_association_properties",
     "AssociationProperty",
     "Instruments",
+    "get_openclaw_otel_config",
+    "get_openclaw_env",
+    "trace_openclaw_operation",
+    "run_openclaw_cli",
 ]
 
 # Default Moda endpoint
@@ -311,6 +321,58 @@ class Moda:
             Moda.__tracer_wrapper.flush()
 
     @staticmethod
+    def get_openclaw_otel_config(
+        api_key: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        service_name: str = "openclaw",
+        enable_traces: bool = True,
+        enable_metrics: bool = True,
+        enable_logs: bool = True,
+        additional_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, object]:
+        """Build OpenClaw diagnostics config for OTLP export to Moda."""
+        return _get_openclaw_otel_config(
+            api_key=api_key,
+            endpoint=endpoint,
+            service_name=service_name,
+            enable_traces=enable_traces,
+            enable_metrics=enable_metrics,
+            enable_logs=enable_logs,
+            additional_headers=additional_headers,
+        )
+
+    @staticmethod
+    def get_openclaw_env(
+        api_key: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        service_name: str = "openclaw",
+        enable_traces: bool = True,
+        enable_metrics: bool = True,
+        enable_logs: bool = True,
+        additional_headers: Optional[Dict[str, str]] = None,
+        extra_env: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        """Build OTEL environment variables for OpenClaw runtime processes."""
+        return _get_openclaw_env(
+            api_key=api_key,
+            endpoint=endpoint,
+            service_name=service_name,
+            enable_traces=enable_traces,
+            enable_metrics=enable_metrics,
+            enable_logs=enable_logs,
+            additional_headers=additional_headers,
+            extra_env=extra_env,
+        )
+
+    @staticmethod
+    def run_openclaw_cli(
+        args: List[str],
+        **kwargs,
+    ) -> object:
+        """Run OpenClaw CLI with Moda OTEL env and tracing span."""
+        return _run_openclaw_cli(args, **kwargs)
+
+    @staticmethod
     def get_default_span_processor(
         disable_batch: bool = False,
         api_endpoint: Optional[str] = None,
@@ -400,6 +462,58 @@ def flush() -> None:
         moda.flush()  # Ensure all spans are sent before exit
     """
     Moda.flush()
+
+
+def get_openclaw_otel_config(
+    api_key: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    service_name: str = "openclaw",
+    enable_traces: bool = True,
+    enable_metrics: bool = True,
+    enable_logs: bool = True,
+    additional_headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, object]:
+    """Build OpenClaw diagnostics config for OTLP export to Moda."""
+    return Moda.get_openclaw_otel_config(
+        api_key=api_key,
+        endpoint=endpoint,
+        service_name=service_name,
+        enable_traces=enable_traces,
+        enable_metrics=enable_metrics,
+        enable_logs=enable_logs,
+        additional_headers=additional_headers,
+    )
+
+
+def get_openclaw_env(
+    api_key: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    service_name: str = "openclaw",
+    enable_traces: bool = True,
+    enable_metrics: bool = True,
+    enable_logs: bool = True,
+    additional_headers: Optional[Dict[str, str]] = None,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """Build OTEL environment variables for OpenClaw runtime processes."""
+    return Moda.get_openclaw_env(
+        api_key=api_key,
+        endpoint=endpoint,
+        service_name=service_name,
+        enable_traces=enable_traces,
+        enable_metrics=enable_metrics,
+        enable_logs=enable_logs,
+        additional_headers=additional_headers,
+        extra_env=extra_env,
+    )
+
+
+def run_openclaw_cli(
+    args: List[str],
+    **kwargs,
+) -> object:
+    """Run OpenClaw CLI with Moda OTEL env and tracing span."""
+    return Moda.run_openclaw_cli(args, **kwargs)
 
 
 # Keep backward compatibility with Traceloop
