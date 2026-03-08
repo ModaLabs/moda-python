@@ -369,6 +369,91 @@ async def test_dict_style_stream_events(instrumentor, span_exporter):
     assert span.attributes.get("claude_agent.session_id") == "sess-dict"
 
 
+async def test_stream_text_delta_emits_completion_without_assistant_text(instrumentor, span_exporter):
+    """Stream text_deltas should emit llm.completions even when AssistantMessage has no text blocks."""
+
+    class DictStreamEvent:
+        def __init__(self, event_dict):
+            self.event = event_dict
+
+    client = _make_client([
+        DictStreamEvent({
+            "type": "message_start",
+            "message": {
+                "usage": {"input_tokens": 120},
+                "model": "claude-sonnet-4-20250514",
+            },
+        }),
+        DictStreamEvent({
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "stream-only completion"},
+        }),
+        DictStreamEvent({"type": "message_stop"}),
+        DictStreamEvent({
+            "type": "message_delta",
+            "usage": {"output_tokens": 22},
+        }),
+        ResultMessage(num_turns=1, session_id="sess-stream-only"),
+    ])
+
+    await client.query("Stream-only completion test")
+    async for _ in client.receive_response():
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    span = spans[0]
+    assert span.attributes.get("llm.completions.0.role") == "assistant"
+    assert span.attributes.get("llm.completions.0.content") == "stream-only completion"
+    assert span.attributes.get("gen_ai.usage.input_tokens") == 120
+    assert span.attributes.get("gen_ai.usage.output_tokens") == 22
+
+
+async def test_dedupes_adjacent_stream_and_assistant_completion_text(instrumentor, span_exporter):
+    """The same completion seen in stream + assistant events should be emitted once."""
+
+    class DictStreamEvent:
+        def __init__(self, event_dict):
+            self.event = event_dict
+
+    class RealAssistantMessage:
+        def __init__(self, model=None, content=None):
+            self.model = model
+            self.content = content or []
+
+    client = _make_client([
+        DictStreamEvent({
+            "type": "message_start",
+            "message": {
+                "usage": {"input_tokens": 80},
+                "model": "claude-sonnet-4-20250514",
+            },
+        }),
+        DictStreamEvent({
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "duplicate completion"},
+        }),
+        DictStreamEvent({"type": "message_stop"}),
+        RealAssistantMessage(
+            model="claude-sonnet-4-20250514",
+            content=[MagicMock(type="text", text="duplicate completion")],
+        ),
+        ResultMessage(num_turns=1, session_id="sess-dedupe"),
+    ])
+
+    await client.query("Dedupe test")
+    async for _ in client.receive_response():
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    span = spans[0]
+    assert span.attributes.get("llm.completions.0.content") == "duplicate completion"
+    assert span.attributes.get("llm.completions.1.content") is None
+
+
 async def test_uninstrument_removes_wrapping(tracer_provider, span_exporter):
     """After uninstrument(), calls should not create spans."""
 
