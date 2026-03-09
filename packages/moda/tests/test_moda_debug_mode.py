@@ -18,8 +18,8 @@ class _DummyModa:
 
 
 def _call_init(monkeypatch, env_value: str | None, explicit_debug=Ellipsis):
-    monkeypatch.setattr(moda, "Moda", _DummyModa)
-    monkeypatch.setattr(moda, "_moda_instance", None)
+    monkeypatch.setitem(moda.init.__globals__, "Moda", _DummyModa)
+    monkeypatch.setitem(moda.init.__globals__, "_moda_instance", None)
 
     if env_value is None:
         monkeypatch.delenv("MODA_DEBUG", raising=False)
@@ -58,4 +58,3 @@ def test_explicit_debug_true_overrides_env_false(monkeypatch):
 def test_unknown_env_value_falls_back_to_default_false(monkeypatch):
     kwargs = _call_init(monkeypatch, env_value="definitely-not-a-bool")
     assert "disable_batch" not in kwargs
-
