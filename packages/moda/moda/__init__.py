@@ -33,12 +33,24 @@ from traceloop.sdk.conversation import (
     get_conversation_id,
     get_user_id,
 )
-from moda.openclaw import (
-    get_openclaw_env,
-    get_openclaw_otel_config,
-    run_openclaw_cli,
-    trace_openclaw_operation,
-)
+try:
+    from moda.openclaw import (
+        get_openclaw_env,
+        get_openclaw_otel_config,
+        run_openclaw_cli,
+        trace_openclaw_operation,
+    )
+except ImportError:
+    def _openclaw_unavailable(*_args, **_kwargs):
+        raise ImportError(
+            "OpenClaw helpers are unavailable. Install/update the moda package "
+            "that includes `moda.openclaw`."
+        )
+
+    get_openclaw_env = _openclaw_unavailable
+    get_openclaw_otel_config = _openclaw_unavailable
+    run_openclaw_cli = _openclaw_unavailable
+    trace_openclaw_operation = _openclaw_unavailable
 
 # Vapi integration
 from moda.vapi import (
