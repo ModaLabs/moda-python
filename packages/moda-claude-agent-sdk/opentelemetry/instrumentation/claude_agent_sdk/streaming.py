@@ -48,6 +48,12 @@ class WrappedAgentStream:
         self._num_turns = None
         self._session_id = None
         self._model = None
+        # Keep completion candidates with turn/source metadata so we can dedupe
+        # only stream+assistant duplicates within the same turn.
+        self._completion_entries = []
+        self._stream_text_buffer = []
+        self._turn_counter = 0
+        self._current_turn_id = None
 
     def __aiter__(self):
         return self
@@ -91,6 +97,40 @@ class WrappedAgentStream:
         except Exception as e:
             logger.debug(f"Error processing agent message: {e}")
 
+    def _next_turn_id(self):
+        self._turn_counter += 1
+        self._current_turn_id = self._turn_counter
+        return self._current_turn_id
+
+    def _get_or_create_turn_id(self):
+        if self._current_turn_id is None:
+            return self._next_turn_id()
+        return self._current_turn_id
+
+    def _add_completion_candidate(self, completion_text: str, source: str):
+        if not isinstance(completion_text, str) or not completion_text.strip():
+            return
+
+        turn_id = self._get_or_create_turn_id()
+        normalized = completion_text.strip()
+
+        # Dedupe only within the same turn and only across different sources
+        # (stream vs assistant). Identical completions across turns must survive.
+        for existing_turn, existing_source, existing_text in self._completion_entries:
+            if existing_turn != turn_id:
+                continue
+            if existing_source == source:
+                continue
+            if existing_text.strip() == normalized:
+                return
+
+        self._completion_entries.append((turn_id, source, completion_text))
+
+    def _flush_stream_text_buffer(self):
+        if self._stream_text_buffer:
+            self._add_completion_candidate("".join(self._stream_text_buffer), source="stream")
+            self._stream_text_buffer = []
+
     def _handle_result_message(self, msg):
         """Extract token usage and metadata from the final ResultMessage.
 
@@ -130,6 +170,7 @@ class WrappedAgentStream:
             return
 
         if isinstance(content, list):
+            text_chunks = []
             for block in content:
                 block_type = type(block).__name__
                 if block_type == "ToolUseBlock":
@@ -138,6 +179,13 @@ class WrappedAgentStream:
                     attr_type = getattr(block, "type", None)
                     if attr_type == "tool_use":
                         self._tool_call_count += 1
+                    elif attr_type == "text":
+                        block_text = getattr(block, "text", None)
+                        if isinstance(block_text, str) and block_text:
+                            text_chunks.append(block_text)
+
+            if text_chunks:
+                self._add_completion_candidate("".join(text_chunks), source="assistant")
 
     def _handle_stream_event(self, msg):
         """Extract token usage from raw Anthropic streaming events.
@@ -153,6 +201,9 @@ class WrappedAgentStream:
         event_type = _get(event, "type")
 
         if event_type == "message_start":
+            # Start of a new model message; flush any text from the previous one.
+            self._flush_stream_text_buffer()
+            self._next_turn_id()
             message = _get(event, "message")
             if message:
                 usage = _get(message, "usage")
@@ -163,6 +214,17 @@ class WrappedAgentStream:
                 model = _get(message, "model")
                 if model:
                     self._model = model
+
+        elif event_type == "content_block_delta":
+            delta = _get(event, "delta")
+            delta_type = _get(delta, "type")
+            if delta_type == "text_delta":
+                chunk = _get(delta, "text", "")
+                if isinstance(chunk, str) and chunk:
+                    self._stream_text_buffer.append(chunk)
+
+        elif event_type == "message_stop":
+            self._flush_stream_text_buffer()
 
         elif event_type == "message_delta":
             usage = _get(event, "usage")
@@ -178,6 +240,8 @@ class WrappedAgentStream:
         self._finalized = True
 
         try:
+            # Final defensive flush when streams end without an explicit message_stop.
+            self._flush_stream_text_buffer()
             if error:
                 self._span.set_status(Status(StatusCode.ERROR, str(error)))
                 _set_span_attribute(self._span, "error.type", type(error).__name__)
@@ -194,6 +258,15 @@ class WrappedAgentStream:
             _set_span_attribute(
                 self._span, "llm.usage.total_tokens", self._input_tokens + self._output_tokens
             )
+            if self._completion_entries:
+                # Emit indexed OpenLLMetry-style completions for multi-turn agent runs.
+                for index, (_, _, completion_text) in enumerate(self._completion_entries):
+                    _set_span_attribute(self._span, f"llm.completions.{index}.role", "assistant")
+                    _set_span_attribute(
+                        self._span,
+                        f"llm.completions.{index}.content",
+                        completion_text[:8000],
+                    )
 
             # Agent-specific attributes
             _set_span_attribute(self._span, "claude_agent.num_turns", self._num_turns)

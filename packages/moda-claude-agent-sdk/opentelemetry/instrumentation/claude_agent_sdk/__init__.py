@@ -134,7 +134,11 @@ def _wrap_receive_response(tracer):
         # Capture the prompt if stored by query() wrapper
         prompt = getattr(instance, "_moda_last_prompt", None)
         if prompt:
-            _set_span_attribute(span, "gen_ai.prompt", str(prompt)[:1000])
+            prompt_text = str(prompt)
+            _set_span_attribute(span, "gen_ai.prompt", prompt_text[:1000])
+            # Emit OpenLLMetry-style prompt fields so Moda ingest parser can extract conversation rows.
+            _set_span_attribute(span, "llm.prompts.0.role", "user")
+            _set_span_attribute(span, "llm.prompts.0.content", prompt_text[:4000])
 
         # Call original async generator and wrap it
         async_gen = wrapped(*args, **kwargs)
