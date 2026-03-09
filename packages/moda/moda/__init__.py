@@ -16,6 +16,7 @@ Usage:
     moda.flush()
 """
 
+import os
 import sys
 from types import ModuleType
 from typing import Optional
@@ -32,6 +33,12 @@ from traceloop.sdk.conversation import (
     get_conversation_id,
     get_user_id,
 )
+from moda.openclaw import (
+    get_openclaw_env,
+    get_openclaw_otel_config,
+    run_openclaw_cli,
+    trace_openclaw_operation,
+)
 
 # Vapi integration
 from moda.vapi import (
@@ -42,13 +49,32 @@ from moda.vapi import (
 # Module-level instance for convenience
 _moda_instance: Moda | None = None
 
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+_FALSE_ENV_VALUES = {"0", "false", "no", "off", ""}
+
+
+def _resolve_debug_enabled(explicit_debug: bool | None) -> tuple[bool, str]:
+    """Resolve debug mode from explicit argument first, then MODA_DEBUG env var."""
+    if explicit_debug is not None:
+        return explicit_debug, "argument"
+
+    raw_env = os.environ.get("MODA_DEBUG")
+    if raw_env is not None:
+        normalized = raw_env.strip().lower()
+        if normalized in _TRUE_ENV_VALUES:
+            return True, "MODA_DEBUG"
+        if normalized in _FALSE_ENV_VALUES:
+            return False, "MODA_DEBUG"
+
+    return False, "default"
+
 
 def init(
     api_key: str | None = None,
     app_name: str | None = None,
     endpoint: str | None = None,
     exporter=None,
-    debug: bool = False,
+    debug: bool | None = None,
     **kwargs,
 ):
     """Initialize Moda SDK.
@@ -58,12 +84,14 @@ def init(
         app_name: Optional name for your application.
         endpoint: Custom ingest endpoint. Defaults to Moda's ingest endpoint.
         exporter: Custom OpenTelemetry exporter (for testing/debugging).
-        debug: Enable debug mode - disables batching, enables verbose logging.
+        debug: Enable debug mode. Precedence: explicit argument > MODA_DEBUG env var > False.
         **kwargs: Additional arguments passed to Moda.init()
     """
     import logging
 
-    if debug:
+    debug_enabled, debug_source = _resolve_debug_enabled(debug)
+
+    if debug_enabled:
         # Enable verbose logging for debugging
         logging.basicConfig(level=logging.DEBUG)
         logging.getLogger("opentelemetry").setLevel(logging.DEBUG)
@@ -73,6 +101,7 @@ def init(
         # Disable batching so spans are sent immediately
         kwargs["disable_batch"] = True
 
+        print(f"[Moda Debug] Enabled via {debug_source}")
         print(f"[Moda Debug] Initializing with endpoint: {endpoint or 'default'}")
         print(f"[Moda Debug] API key: {api_key[:10]}..." if api_key else "[Moda Debug] No API key provided")
 
@@ -92,7 +121,7 @@ def init(
 
     _moda_instance.init(**init_kwargs)
 
-    if debug:
+    if debug_enabled:
         print("[Moda Debug] Initialization complete")
 
 
@@ -170,6 +199,10 @@ __all__ = [
     "get_conversation_id",
     "get_user_id",
     "compute_conversation_id",
+    "get_openclaw_otel_config",
+    "get_openclaw_env",
+    "trace_openclaw_operation",
+    "run_openclaw_cli",
     "Instruments",
     "Moda",
     # Vapi integration
