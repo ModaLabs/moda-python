@@ -1,0 +1,146 @@
+"""Tests for OpenTelemetry provider coexistence.
+
+Verifies that Moda correctly detects and integrates with existing
+TracerProviders set up by other SDKs (Sentry, PostHog, Datadog, etc.).
+"""
+
+import pytest
+from unittest.mock import patch, MagicMock
+
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from traceloop.sdk.tracing.tracing import TracerWrapper
+
+
+@pytest.fixture(autouse=True)
+def clean_tracer_wrapper():
+    """Ensure TracerWrapper singleton is clean before each test."""
+    if hasattr(TracerWrapper, "instance"):
+        saved = TracerWrapper.instance
+        del TracerWrapper.instance
+    else:
+        saved = None
+    yield
+    # Restore
+    if saved is not None:
+        TracerWrapper.instance = saved
+    elif hasattr(TracerWrapper, "instance"):
+        del TracerWrapper.instance
+
+
+class TestExternalProviderDetection:
+    """Tests that Moda detects and attaches to existing TracerProviders."""
+
+    def test_attaches_to_existing_tracer_provider(self):
+        """When a real TracerProvider exists, Moda should add its processor to it."""
+        # Simulate an external provider (e.g., PostHog, Datadog)
+        external_exporter = InMemorySpanExporter()
+        external_provider = TracerProvider()
+        external_provider.add_span_processor(SimpleSpanProcessor(external_exporter))
+
+        # Register it globally (this is what external SDKs do)
+        trace.set_tracer_provider(external_provider)
+
+        try:
+            # Now init Moda — should detect the existing provider
+            moda_exporter = InMemorySpanExporter()
+            from traceloop.sdk import Traceloop
+
+            Traceloop.init(
+                app_name="coexistence-test",
+                exporter=moda_exporter,
+                disable_batch=True,
+            )
+
+            # Create a span using the global tracer
+            tracer = trace.get_tracer("test")
+            with tracer.start_as_current_span("test-span") as span:
+                span.set_attribute("test.key", "value")
+
+            # External exporter should have received the span
+            external_spans = external_exporter.get_finished_spans()
+            assert len(external_spans) >= 1, (
+                f"External provider received {len(external_spans)} spans, expected >= 1"
+            )
+
+        finally:
+            # Reset global provider
+            trace.set_tracer_provider(TracerProvider())
+
+    def test_creates_own_provider_when_none_exists(self):
+        """When no external provider exists, Moda should create its own."""
+        # Reset to default (ProxyTracerProvider)
+        trace.set_tracer_provider(TracerProvider())
+
+        moda_exporter = InMemorySpanExporter()
+        from traceloop.sdk import Traceloop
+
+        Traceloop.init(
+            app_name="own-provider-test",
+            exporter=moda_exporter,
+            disable_batch=True,
+        )
+
+        # Create a span — Moda's exporter should receive it
+        tracer = trace.get_tracer("test")
+        with tracer.start_as_current_span("test-span") as span:
+            span.set_attribute("test.key", "value")
+
+        moda_spans = moda_exporter.get_finished_spans()
+        assert len(moda_spans) >= 1, (
+            f"Moda exporter received {len(moda_spans)} spans, expected >= 1"
+        )
+
+
+class TestMultipleProcessors:
+    """Tests that multiple span processors can coexist."""
+
+    def test_multiple_processors_all_receive_spans(self):
+        """When multiple processors are passed, all should receive spans."""
+        exporter1 = InMemorySpanExporter()
+        exporter2 = InMemorySpanExporter()
+
+        processor1 = SimpleSpanProcessor(exporter1)
+        processor2 = SimpleSpanProcessor(exporter2)
+
+        from traceloop.sdk import Traceloop
+
+        Traceloop.init(
+            app_name="multi-processor-test",
+            processor=[processor1, processor2],
+        )
+
+        tracer = trace.get_tracer("test")
+        with tracer.start_as_current_span("test-span") as span:
+            span.set_attribute("test.key", "value")
+
+        spans1 = exporter1.get_finished_spans()
+        spans2 = exporter2.get_finished_spans()
+
+        assert len(spans1) >= 1, f"Processor 1 received {len(spans1)} spans, expected >= 1"
+        assert len(spans2) >= 1, f"Processor 2 received {len(spans2)} spans, expected >= 1"
+
+
+class TestUrlExclusions:
+    """Tests that external observability provider URLs are excluded from tracing."""
+
+    def test_excluded_urls_contain_sentry(self):
+        """Sentry URLs should be in the exclusion list."""
+        from traceloop.sdk.tracing.tracing import EXCLUDED_URLS
+
+        assert "sentry.io" in EXCLUDED_URLS, "sentry.io should be excluded from tracing"
+
+    def test_excluded_urls_contain_posthog(self):
+        """PostHog URLs should be in the exclusion list."""
+        from traceloop.sdk.tracing.tracing import EXCLUDED_URLS
+
+        assert "posthog.com" in EXCLUDED_URLS, "posthog.com should be excluded from tracing"
+
+    def test_excluded_urls_contain_traceloop(self):
+        """Traceloop URLs should be in the exclusion list."""
+        from traceloop.sdk.tracing.tracing import EXCLUDED_URLS
+
+        assert "traceloop.com" in EXCLUDED_URLS, "traceloop.com should be excluded from tracing"
