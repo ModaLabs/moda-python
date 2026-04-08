@@ -302,6 +302,18 @@ def _get_vendor_from_url(base_url):
         return "Google"
     elif "openrouter.ai" in base_url:
         return "OpenRouter"
+    elif "groq.com" in base_url:
+        return "Groq"
+    elif "together.xyz" in base_url or "together.ai" in base_url:
+        return "Together"
+    elif "mistral.ai" in base_url:
+        return "Mistral"
+    elif "cohere.com" in base_url or "cohere.ai" in base_url:
+        return "Cohere"
+    elif "deepseek.com" in base_url:
+        return "DeepSeek"
+    elif "fireworks.ai" in base_url:
+        return "Fireworks"
 
     return "openai"
 
