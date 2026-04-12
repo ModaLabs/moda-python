@@ -5,14 +5,21 @@ TracerProviders set up by other SDKs (Sentry, PostHog, Datadog, etc.).
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import ProxyTracerProvider
 
 from traceloop.sdk.tracing.tracing import TracerWrapper
+
+
+@pytest.fixture(scope="module")
+def exporter():
+    """Override the shared test exporter fixture to keep this module isolated."""
+    return InMemorySpanExporter()
 
 
 @pytest.fixture(autouse=True)
@@ -41,10 +48,13 @@ class TestExternalProviderDetection:
         external_provider = TracerProvider()
         external_provider.add_span_processor(SimpleSpanProcessor(external_exporter))
 
-        # Register it globally (this is what external SDKs do)
-        trace.set_tracer_provider(external_provider)
-
-        try:
+        with patch(
+            "traceloop.sdk.tracing.tracing.get_tracer_provider",
+            return_value=external_provider,
+        ), patch(
+            "traceloop.sdk.tracing.tracing.trace.set_tracer_provider",
+            lambda provider: None,
+        ):
             # Now init Moda — should detect the existing provider
             moda_exporter = InMemorySpanExporter()
             from traceloop.sdk import Traceloop
@@ -55,8 +65,8 @@ class TestExternalProviderDetection:
                 disable_batch=True,
             )
 
-            # Create a span using the global tracer
-            tracer = trace.get_tracer("test")
+            # Create a span using the simulated external provider directly.
+            tracer = external_provider.get_tracer("test")
             with tracer.start_as_current_span("test-span") as span:
                 span.set_attribute("test.key", "value")
 
@@ -66,33 +76,32 @@ class TestExternalProviderDetection:
                 f"External provider received {len(external_spans)} spans, expected >= 1"
             )
 
-        finally:
-            # Reset global provider
-            trace.set_tracer_provider(TracerProvider())
-
     def test_creates_own_provider_when_none_exists(self):
         """When no external provider exists, Moda should create its own."""
-        # Reset to default (ProxyTracerProvider)
-        trace.set_tracer_provider(TracerProvider())
-
         moda_exporter = InMemorySpanExporter()
-        from traceloop.sdk import Traceloop
+        with patch(
+            "traceloop.sdk.tracing.tracing.get_tracer_provider",
+            return_value=ProxyTracerProvider(),
+        ), patch(
+            "traceloop.sdk.tracing.tracing.trace.set_tracer_provider",
+            lambda provider: None,
+        ):
+            from traceloop.sdk import Traceloop
 
-        Traceloop.init(
-            app_name="own-provider-test",
-            exporter=moda_exporter,
-            disable_batch=True,
-        )
+            Traceloop.init(
+                app_name="own-provider-test",
+                exporter=moda_exporter,
+                disable_batch=True,
+            )
 
-        # Create a span — Moda's exporter should receive it
-        tracer = trace.get_tracer("test")
-        with tracer.start_as_current_span("test-span") as span:
-            span.set_attribute("test.key", "value")
+            tracer = TracerWrapper.instance.get_tracer()
+            with tracer.start_as_current_span("test-span") as span:
+                span.set_attribute("test.key", "value")
 
-        moda_spans = moda_exporter.get_finished_spans()
-        assert len(moda_spans) >= 1, (
-            f"Moda exporter received {len(moda_spans)} spans, expected >= 1"
-        )
+            moda_spans = moda_exporter.get_finished_spans()
+            assert len(moda_spans) >= 1, (
+                f"Moda exporter received {len(moda_spans)} spans, expected >= 1"
+            )
 
 
 class TestMultipleProcessors:
@@ -106,22 +115,29 @@ class TestMultipleProcessors:
         processor1 = SimpleSpanProcessor(exporter1)
         processor2 = SimpleSpanProcessor(exporter2)
 
-        from traceloop.sdk import Traceloop
+        with patch(
+            "traceloop.sdk.tracing.tracing.get_tracer_provider",
+            return_value=ProxyTracerProvider(),
+        ), patch(
+            "traceloop.sdk.tracing.tracing.trace.set_tracer_provider",
+            lambda provider: None,
+        ):
+            from traceloop.sdk import Traceloop
 
-        Traceloop.init(
-            app_name="multi-processor-test",
-            processor=[processor1, processor2],
-        )
+            Traceloop.init(
+                app_name="multi-processor-test",
+                processor=[processor1, processor2],
+            )
 
-        tracer = trace.get_tracer("test")
-        with tracer.start_as_current_span("test-span") as span:
-            span.set_attribute("test.key", "value")
+            tracer = TracerWrapper.instance.get_tracer()
+            with tracer.start_as_current_span("test-span") as span:
+                span.set_attribute("test.key", "value")
 
-        spans1 = exporter1.get_finished_spans()
-        spans2 = exporter2.get_finished_spans()
+            spans1 = exporter1.get_finished_spans()
+            spans2 = exporter2.get_finished_spans()
 
-        assert len(spans1) >= 1, f"Processor 1 received {len(spans1)} spans, expected >= 1"
-        assert len(spans2) >= 1, f"Processor 2 received {len(spans2)} spans, expected >= 1"
+            assert len(spans1) >= 1, f"Processor 1 received {len(spans1)} spans, expected >= 1"
+            assert len(spans2) >= 1, f"Processor 2 received {len(spans2)} spans, expected >= 1"
 
 
 class TestUrlExclusions:

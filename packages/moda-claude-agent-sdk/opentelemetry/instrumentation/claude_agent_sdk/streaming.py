@@ -11,11 +11,21 @@ logger = logging.getLogger(__name__)
 
 def _set_span_attribute(span: Span, name: str, value):
     """Set a span attribute only if value is not None."""
-    if value is not None and value != "":
-        try:
-            span.set_attribute(name, value)
-        except Exception:
-            pass
+    if value is None or value == "":
+        return
+
+    primitive_types = (bool, str, bytes, int, float)
+    if isinstance(value, (list, tuple)):
+        if not all(isinstance(item, primitive_types) for item in value):
+            return
+        value = list(value)
+    elif not isinstance(value, primitive_types):
+        return
+
+    try:
+        span.set_attribute(name, value)
+    except Exception:
+        pass
 
 
 def _get(obj, key, default=None):
@@ -23,6 +33,20 @@ def _get(obj, key, default=None):
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _safe_string(value) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _safe_json_value(value):
+    if value in (None, ""):
+        return {}
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        return {}
 
 
 class WrappedAgentStream:
@@ -184,9 +208,9 @@ class WrappedAgentStream:
                 if block_type == "ToolUseBlock" or attr_type == "tool_use":
                     self._tool_call_count += 1
                     # Capture tool call details
-                    tool_name = getattr(block, "name", "") or ""
-                    tool_id = getattr(block, "id", "") or ""
-                    tool_input = getattr(block, "input", {}) or {}
+                    tool_name = _safe_string(getattr(block, "name", ""))
+                    tool_id = _safe_string(getattr(block, "id", ""))
+                    tool_input = _safe_json_value(getattr(block, "input", {}))
                     self._tool_calls.append({
                         "name": tool_name,
                         "id": tool_id,
@@ -194,7 +218,7 @@ class WrappedAgentStream:
                     })
                 elif block_type == "ThinkingBlock" or attr_type == "thinking":
                     self._has_thinking = True
-                    thinking_text = getattr(block, "thinking", "") or ""
+                    thinking_text = _safe_string(getattr(block, "thinking", ""))
                     if thinking_text:
                         self._thinking_blocks.append(thinking_text)
                 elif attr_type == "text":
@@ -299,12 +323,23 @@ class WrappedAgentStream:
                         )
                     if tc.get("id"):
                         _set_span_attribute(self._span, f"gen_ai.tool_calls.{i}.id", tc["id"])
-                    if tc.get("input"):
-                        _set_span_attribute(
-                            self._span,
-                            f"gen_ai.tool_calls.{i}.function.arguments",
-                            json.dumps(tc["input"]) if not isinstance(tc["input"], str) else tc["input"],
-                        )
+                    tool_input = tc.get("input")
+                    if tool_input not in (None, "", {}):
+                        try:
+                            serialized_input = (
+                                tool_input
+                                if isinstance(tool_input, str)
+                                else json.dumps(tool_input)
+                            )
+                        except (TypeError, ValueError):
+                            serialized_input = None
+
+                        if serialized_input:
+                            _set_span_attribute(
+                                self._span,
+                                f"gen_ai.tool_calls.{i}.function.arguments",
+                                serialized_input,
+                            )
 
             # Thinking block attributes
             if self._has_thinking:
