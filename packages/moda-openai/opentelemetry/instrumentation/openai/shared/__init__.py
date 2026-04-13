@@ -314,6 +314,8 @@ def _get_vendor_from_url(base_url):
         return "DeepSeek"
     elif "fireworks.ai" in base_url:
         return "Fireworks"
+    elif "litellm" in base_url:
+        return "LiteLLM"
 
     return "openai"
 
@@ -347,6 +349,66 @@ def _extract_model_name_from_provider_format(model_name):
         return parts[-1]  # Return the last part (actual model name)
 
     return model_name
+
+
+def _extract_litellm_headers(response):
+    """
+    Extract LiteLLM metadata from response headers.
+    Returns dict with LiteLLM metadata if detected, None otherwise.
+    """
+    headers = None
+
+    # Try to access headers from OpenAI SDK response object
+    if hasattr(response, '_response') and hasattr(response._response, 'headers'):
+        headers = response._response.headers
+    elif hasattr(response, 'response') and hasattr(response.response, 'headers'):
+        headers = response.response.headers
+    elif hasattr(response, '_headers'):
+        headers = response._headers
+
+    if not headers:
+        return None
+
+    # Helper to safely get header
+    def get_header(name):
+        if hasattr(headers, 'get'):
+            return headers.get(name)
+        return None
+
+    call_id = get_header('x-litellm-call-id')
+    model_id = get_header('x-litellm-model-id')
+    model_group = get_header('x-litellm-model-group')
+    version = get_header('x-litellm-version')
+    cache_hit = get_header('x-litellm-cache-hit')
+
+    if not any([call_id, model_id, model_group, version]):
+        return None
+
+    return {
+        'is_proxy': True,
+        'downstream_provider': model_group or None,
+        'downstream_model': model_id or None,
+        'call_id': call_id or None,
+        'cache_hit': cache_hit in ('True', 'true') if cache_hit else None,
+        'model_group': model_group or None,
+    }
+
+
+def _set_litellm_span_attributes(span, metadata):
+    """Set LiteLLM-specific span attributes on the span."""
+    _set_span_attribute(span, "litellm.is_proxy", True)
+    _set_span_attribute(span, SpanAttributes.LLM_SYSTEM, "LiteLLM")
+
+    if metadata.get('downstream_provider'):
+        _set_span_attribute(span, "litellm.downstream_provider", metadata['downstream_provider'])
+    if metadata.get('downstream_model'):
+        _set_span_attribute(span, "litellm.downstream_model", metadata['downstream_model'])
+    if metadata.get('call_id'):
+        _set_span_attribute(span, "litellm.call_id", metadata['call_id'])
+    if metadata.get('cache_hit') is not None:
+        _set_span_attribute(span, "litellm.cache_hit", metadata['cache_hit'])
+    if metadata.get('model_group'):
+        _set_span_attribute(span, "litellm.model_group", metadata['model_group'])
 
 
 def is_streaming_response(response):

@@ -10,9 +10,11 @@ from opentelemetry import context as context_api
 import pydantic
 from opentelemetry.instrumentation.openai.shared import (
     OPENAI_LLM_USAGE_TOKEN_TYPES,
+    _extract_litellm_headers,
     _get_openai_base_url,
     _set_client_attributes,
     _set_functions_attributes,
+    _set_litellm_span_attributes,
     _set_request_attributes,
     _set_response_attributes,
     _set_span_attribute,
@@ -372,6 +374,11 @@ def _handle_response(
     else:
         if should_send_prompts():
             _set_completions(span, response_dict.get("choices"))
+
+    # Check for LiteLLM proxy headers
+    litellm_metadata = _extract_litellm_headers(response)
+    if litellm_metadata:
+        _set_litellm_span_attributes(span, litellm_metadata)
 
     return response
 
