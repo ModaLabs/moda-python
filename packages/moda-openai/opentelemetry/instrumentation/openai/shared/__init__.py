@@ -378,37 +378,61 @@ def _extract_litellm_headers(response):
     call_id = get_header('x-litellm-call-id')
     model_id = get_header('x-litellm-model-id')
     model_group = get_header('x-litellm-model-group')
-    version = get_header('x-litellm-version')
-    cache_hit = get_header('x-litellm-cache-hit')
+    model_api_base = get_header('x-litellm-model-api-base')
+    litellm_version = get_header('x-litellm-version')
+    response_cost = get_header('x-litellm-response-cost')
+    key_spend = get_header('x-litellm-key-spend')
+    response_duration_ms = get_header('x-litellm-response-duration-ms')
+    overhead_duration_ms = get_header('x-litellm-overhead-duration-ms')
+    attempted_retries = get_header('x-litellm-attempted-retries')
+    attempted_fallbacks = get_header('x-litellm-attempted-fallbacks')
 
-    if not any([call_id, model_id, model_group, version]):
+    if not any([call_id, model_id, model_group, litellm_version]):
         return None
 
     return {
         'is_proxy': True,
-        'downstream_provider': model_group or None,
-        'downstream_model': model_id or None,
         'call_id': call_id or None,
-        'cache_hit': cache_hit in ('True', 'true') if cache_hit else None,
+        'model_id': model_id or None,
         'model_group': model_group or None,
+        'model_api_base': model_api_base or None,
+        'version': litellm_version or None,
+        'response_cost': float(response_cost) if response_cost else None,
+        'key_spend': float(key_spend) if key_spend else None,
+        'response_duration_ms': float(response_duration_ms) if response_duration_ms else None,
+        'overhead_duration_ms': float(overhead_duration_ms) if overhead_duration_ms else None,
+        'attempted_retries': int(attempted_retries) if attempted_retries else None,
+        'attempted_fallbacks': int(attempted_fallbacks) if attempted_fallbacks else None,
     }
 
 
 def _set_litellm_span_attributes(span, metadata):
     """Set LiteLLM-specific span attributes on the span."""
     _set_span_attribute(span, "litellm.is_proxy", True)
-    _set_span_attribute(span, SpanAttributes.LLM_SYSTEM, "LiteLLM")
 
-    if metadata.get('downstream_provider'):
-        _set_span_attribute(span, "litellm.downstream_provider", metadata['downstream_provider'])
-    if metadata.get('downstream_model'):
-        _set_span_attribute(span, "litellm.downstream_model", metadata['downstream_model'])
     if metadata.get('call_id'):
         _set_span_attribute(span, "litellm.call_id", metadata['call_id'])
-    if metadata.get('cache_hit') is not None:
-        _set_span_attribute(span, "litellm.cache_hit", metadata['cache_hit'])
+    if metadata.get('model_id'):
+        _set_span_attribute(span, "litellm.model_id", metadata['model_id'])
     if metadata.get('model_group'):
         _set_span_attribute(span, "litellm.model_group", metadata['model_group'])
+        _set_span_attribute(span, "llm.system", metadata['model_group'])
+    if metadata.get('model_api_base'):
+        _set_span_attribute(span, "litellm.model_api_base", metadata['model_api_base'])
+    if metadata.get('version'):
+        _set_span_attribute(span, "litellm.version", metadata['version'])
+    if metadata.get('response_cost') is not None:
+        _set_span_attribute(span, "litellm.response_cost", metadata['response_cost'])
+    if metadata.get('key_spend') is not None:
+        _set_span_attribute(span, "litellm.key_spend", metadata['key_spend'])
+    if metadata.get('response_duration_ms') is not None:
+        _set_span_attribute(span, "litellm.response_duration_ms", metadata['response_duration_ms'])
+    if metadata.get('overhead_duration_ms') is not None:
+        _set_span_attribute(span, "litellm.overhead_duration_ms", metadata['overhead_duration_ms'])
+    if metadata.get('attempted_retries') is not None:
+        _set_span_attribute(span, "litellm.attempted_retries", metadata['attempted_retries'])
+    if metadata.get('attempted_fallbacks') is not None:
+        _set_span_attribute(span, "litellm.attempted_fallbacks", metadata['attempted_fallbacks'])
 
 
 def is_streaming_response(response):
