@@ -111,6 +111,10 @@ def _set_request_attributes(span, kwargs, instance=None):
     base_url = _get_openai_base_url(instance) if instance else ""
     vendor = _get_vendor_from_url(base_url)
     _set_span_attribute(span, GenAIAttributes.GEN_AI_SYSTEM, vendor)
+    # `gen_ai.system` is deprecated in favor of `gen_ai.provider.name`. Emit
+    # both so consumers on either side of the migration pick it up.
+    _set_span_attribute(span, "gen_ai.provider.name", vendor)
+    _set_span_attribute(span, "gen_ai.operation.name", "chat")
 
     model = kwargs.get("model")
     if vendor == "AWS" and model and "." in model:
@@ -126,6 +130,25 @@ def _set_request_attributes(span, kwargs, instance=None):
         span, GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE, kwargs.get("temperature")
     )
     _set_span_attribute(span, GenAIAttributes.GEN_AI_REQUEST_TOP_P, kwargs.get("top_p"))
+    # OTel-standard request params the Moda backend's expanded OTLP extractor
+    # reads into events_raw.canonical_payload.
+    stop_value = kwargs.get("stop")
+    if stop_value is not None:
+        try:
+            stop_list = stop_value if isinstance(stop_value, list) else [stop_value]
+            _set_span_attribute(
+                span, "gen_ai.request.stop_sequences", json.dumps(stop_list)
+            )
+        except Exception:
+            pass
+    tools_value = kwargs.get("tools")
+    if tools_value:
+        try:
+            _set_span_attribute(
+                span, "gen_ai.request.tools", json.dumps(tools_value)
+            )
+        except Exception:
+            pass
     _set_span_attribute(
         span, SpanAttributes.LLM_FREQUENCY_PENALTY, kwargs.get("frequency_penalty")
     )
@@ -214,6 +237,13 @@ def _set_response_attributes(span, response):
         SpanAttributes.LLM_OPENAI_RESPONSE_SYSTEM_FINGERPRINT,
         response.get("system_fingerprint"),
     )
+    # Mirror under the OTel-standard key so the Moda backend extractor (and
+    # other OTel-aware consumers) picks it up without an OpenAI-specific
+    # mapping.
+    if response.get("system_fingerprint"):
+        _set_span_attribute(
+            span, "gen_ai.system_fingerprint", response.get("system_fingerprint")
+        )
     _set_span_attribute(
         span,
         OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER,

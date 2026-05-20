@@ -75,6 +75,10 @@ async def aset_input_attributes(span, kwargs):
     from opentelemetry.instrumentation.anthropic import set_span_attribute
 
     set_span_attribute(span, GenAIAttributes.GEN_AI_REQUEST_MODEL, kwargs.get("model"))
+    # `gen_ai.system` is deprecated; the current key is `gen_ai.provider.name`.
+    # Emit both so consumers on either side of the migration see it.
+    set_span_attribute(span, "gen_ai.provider.name", "anthropic")
+    set_span_attribute(span, "gen_ai.operation.name", "chat")
     set_span_attribute(
         span, GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS, kwargs.get("max_tokens_to_sample")
     )
@@ -82,6 +86,30 @@ async def aset_input_attributes(span, kwargs):
         span, GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE, kwargs.get("temperature")
     )
     set_span_attribute(span, GenAIAttributes.GEN_AI_REQUEST_TOP_P, kwargs.get("top_p"))
+    # OTel-standard request params the Moda backend's expanded OTLP extractor
+    # reads into events_raw.canonical_payload. Anthropic uses `stop_sequences`
+    # (list) and `tools` (list of tool defs).
+    stop_sequences = kwargs.get("stop_sequences")
+    if stop_sequences:
+        try:
+            set_span_attribute(
+                span, "gen_ai.request.stop_sequences", json.dumps(stop_sequences)
+            )
+        except Exception:
+            pass
+    tools_value = kwargs.get("tools")
+    if tools_value:
+        try:
+            set_span_attribute(
+                span, "gen_ai.request.tools", json.dumps(tools_value)
+            )
+        except Exception:
+            pass
+    # Anthropic also accepts max_tokens (not just max_tokens_to_sample).
+    if kwargs.get("max_tokens") is not None:
+        set_span_attribute(
+            span, GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS, kwargs.get("max_tokens")
+        )
     set_span_attribute(
         span, SpanAttributes.LLM_FREQUENCY_PENALTY, kwargs.get("frequency_penalty")
     )
@@ -221,6 +249,11 @@ async def _aset_span_completions(span, response):
     index = 0
     prefix = f"{GenAIAttributes.GEN_AI_COMPLETION}.{index}"
     set_span_attribute(span, f"{prefix}.finish_reason", response.get("stop_reason"))
+    # Mirror under the OTel-standard key so downstream OTel-aware consumers
+    # (the Moda backend extractor included) pick it up without an Anthropic
+    # mapping. The per-completion `finish_reason` above stays for back-compat.
+    if response.get("stop_reason"):
+        set_span_attribute(span, "gen_ai.response.finish_reason", response.get("stop_reason"))
     if response.get("role"):
         set_span_attribute(span, f"{prefix}.role", response.get("role"))
 
@@ -289,6 +322,11 @@ def _set_span_completions(span, response):
     index = 0
     prefix = f"{GenAIAttributes.GEN_AI_COMPLETION}.{index}"
     set_span_attribute(span, f"{prefix}.finish_reason", response.get("stop_reason"))
+    # Mirror under the OTel-standard key so downstream OTel-aware consumers
+    # (the Moda backend extractor included) pick it up without an Anthropic
+    # mapping. The per-completion `finish_reason` above stays for back-compat.
+    if response.get("stop_reason"):
+        set_span_attribute(span, "gen_ai.response.finish_reason", response.get("stop_reason"))
     if response.get("role"):
         set_span_attribute(span, f"{prefix}.role", response.get("role"))
 
@@ -356,6 +394,16 @@ async def aset_response_attributes(span, response):
     response = await _aextract_response_data(response)
     set_span_attribute(span, GenAIAttributes.GEN_AI_RESPONSE_MODEL, response.get("model"))
     set_span_attribute(span, GenAIAttributes.GEN_AI_RESPONSE_ID, response.get("id"))
+    # Spec key is `gen_ai.response.finish_reasons` (plural, array). Anthropic
+    # returns one stop_reason per response so the array has length 1.
+    stop_reason = response.get("stop_reason")
+    if stop_reason:
+        try:
+            set_span_attribute(
+                span, "gen_ai.response.finish_reasons", json.dumps([stop_reason])
+            )
+        except Exception:
+            pass
 
     if response.get("usage"):
         prompt_tokens = response.get("usage").input_tokens
@@ -364,6 +412,20 @@ async def aset_response_attributes(span, response):
         set_span_attribute(
             span, GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
         )
+        # Anthropic prompt-cache tokens. The OTel GenAI semconv has dedicated
+        # keys for these so consumers don't need an Anthropic-specific path.
+        cache_read = getattr(response.get("usage"), "cache_read_input_tokens", None)
+        if isinstance(cache_read, int):
+            set_span_attribute(
+                span, "gen_ai.usage.cache_read.input_tokens", cache_read
+            )
+        cache_creation = getattr(
+            response.get("usage"), "cache_creation_input_tokens", None
+        )
+        if isinstance(cache_creation, int):
+            set_span_attribute(
+                span, "gen_ai.usage.cache_creation.input_tokens", cache_creation
+            )
         set_span_attribute(
             span,
             SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
