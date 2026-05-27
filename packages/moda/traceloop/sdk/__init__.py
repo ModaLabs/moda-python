@@ -48,6 +48,7 @@ from traceloop.sdk.openclaw import (
     run_openclaw_cli as _run_openclaw_cli,
     trace_openclaw_operation,
 )
+from traceloop.sdk.prompts import prompt
 
 # Import conversation and context modules
 from traceloop.sdk.context import (
@@ -76,6 +77,7 @@ __all__ = [
     "compute_conversation_id",
     "set_association_properties",
     "AssociationProperty",
+    "prompt",
     "Instruments",
     "get_openclaw_otel_config",
     "get_openclaw_env",
@@ -313,6 +315,11 @@ class Moda:
     def set_prompt(template: str, variables: dict, version: int):
         """Set external prompt tracing context."""
         set_external_prompt_tracing_context(template, variables, version)
+
+    @staticmethod
+    def prompt(key: str, **options):
+        """Load and render a code-first prompt."""
+        return prompt(key, **options)
 
     @staticmethod
     def flush() -> None:

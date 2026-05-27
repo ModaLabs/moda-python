@@ -1,5 +1,6 @@
 import json
 
+import moda
 import pytest
 from openai import OpenAI
 from opentelemetry.semconv._incubating.attributes import (
@@ -240,6 +241,9 @@ def test_prompt_management(exporter, openai_client):
     )
     assert open_ai_span.attributes.get(f"{GenAIAttributes.GEN_AI_COMPLETION}.0.content")
     assert open_ai_span.attributes.get("traceloop.prompt.key") == "joke_generator"
+    assert open_ai_span.attributes.get("moda.prompt_key") == "joke_generator"
+    assert open_ai_span.attributes.get("moda.prompt_id") == "clpuabf3h0002kdmoz3k3hesu"
+    assert open_ai_span.attributes.get("moda.prompt_version_id") == "clpuabf780000106giwxkinpq"
 
 
 @pytest.mark.vcr
@@ -276,3 +280,38 @@ def test_prompt_management_with_response_format(exporter, openai_client):
     except json.JSONDecodeError:
         pytest.fail("Response is not valid JSON")
     assert True
+
+
+def test_code_first_prompt_render_sets_moda_context(tmp_path, monkeypatch):
+    prompts_dir = tmp_path / "prompts" / "support"
+    prompts_dir.mkdir(parents=True)
+    moda_dir = tmp_path / ".moda"
+    moda_dir.mkdir()
+    (moda_dir / "prompts.yml").write_text('version: 1\nprompt_paths:\n  - "prompts/**/*.prompt.md"\n')
+    (moda_dir / "prompts.lock.json").write_text(json.dumps({
+        "version": 1,
+        "prompts": {
+            "support.triage": {
+                "promptId": "prompt_123",
+                "versionId": "pver_123",
+                "contentHash": "hash_123",
+                "sourcePath": "prompts/support/triage.prompt.md",
+            }
+        },
+    }))
+    (prompts_dir / "triage.prompt.md").write_text(
+        "---\n"
+        "key: support.triage\n"
+        "name: Support triage\n"
+        "system_prompt: You triage support tickets.\n"
+        "---\n"
+        "Ticket: {{ticket.text}}\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    rendered = moda.prompt("support.triage").render({"ticket": {"text": "Refund request"}})
+
+    assert rendered["messages"] == [
+        {"role": "system", "content": "You triage support tickets."},
+        {"role": "user", "content": "Ticket: Refund request"},
+    ]

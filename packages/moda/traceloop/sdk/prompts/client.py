@@ -92,6 +92,8 @@ class PromptRegistryClient:
             prompt_version.name,
             prompt_version.hash,
             variables,
+            prompt.id,
+            prompt_version.id,
         )
 
         return params_dict

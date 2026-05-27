@@ -265,10 +265,12 @@ def get_chained_entity_path(entity_name: str) -> str:
 
 def set_managed_prompt_tracing_context(
     key: str,
-    version: int,
+    version,
     version_name: str,
     version_hash: str,
     template_variables: dict,
+    prompt_id: str = None,
+    version_id: str = None,
 ) -> None:
     attach(set_value("managed_prompt", True))
     attach(set_value("prompt_key", key))
@@ -276,6 +278,10 @@ def set_managed_prompt_tracing_context(
     attach(set_value("prompt_version_name", version_name))
     attach(set_value("prompt_version_hash", version_hash))
     attach(set_value("prompt_template_variables", template_variables))
+    if prompt_id is not None:
+        attach(set_value("prompt_id", prompt_id))
+    if version_id is not None:
+        attach(set_value("prompt_version_id", version_id))
 
 
 def set_external_prompt_tracing_context(
@@ -363,12 +369,14 @@ def default_span_processor_on_start(span: Span, parent_context: Context | None =
         prompt_key = get_value("prompt_key")
         if prompt_key is not None:
             span.set_attribute(SpanAttributes.TRACELOOP_PROMPT_KEY, str(prompt_key))
+            span.set_attribute("moda.prompt_key", str(prompt_key))
 
         prompt_version = get_value("prompt_version")
         if prompt_version is not None:
             span.set_attribute(
                 SpanAttributes.TRACELOOP_PROMPT_VERSION, str(prompt_version)
             )
+            span.set_attribute("moda.prompt_version", str(prompt_version))
 
         prompt_version_name = get_value("prompt_version_name")
         if prompt_version_name is not None:
@@ -381,6 +389,17 @@ def default_span_processor_on_start(span: Span, parent_context: Context | None =
             span.set_attribute(
                 SpanAttributes.TRACELOOP_PROMPT_VERSION_HASH, str(prompt_version_hash)
             )
+            span.set_attribute("moda.prompt_content_hash", str(prompt_version_hash))
+
+        prompt_id = get_value("prompt_id")
+        if prompt_id is not None:
+            span.set_attribute("moda.prompt_id", str(prompt_id))
+
+        prompt_version_id = get_value("prompt_version_id")
+        if prompt_version_id is not None:
+            span.set_attribute("moda.prompt_version_id", str(prompt_version_id))
+        elif prompt_version_hash is not None:
+            span.set_attribute("moda.prompt_version_id", str(prompt_version_hash))
 
         prompt_template = get_value("prompt_template")
         if prompt_template is not None:
