@@ -32,6 +32,7 @@ from traceloop.sdk.conversation import (
     get_conversation_id,
     get_user_id,
 )
+from traceloop.sdk.prompts import get_prompt, prompt
 from moda.openclaw import (
     get_openclaw_env,
     get_openclaw_otel_config,
@@ -176,6 +177,8 @@ __all__ = [
     "get_conversation_id",
     "get_user_id",
     "compute_conversation_id",
+    "get_prompt",
+    "prompt",
     "get_openclaw_otel_config",
     "get_openclaw_env",
     "trace_openclaw_operation",

@@ -5,6 +5,10 @@ from traceloop.sdk.prompts.registry import PromptRegistry
 from traceloop.sdk.tracing.tracing import set_managed_prompt_tracing_context
 
 
+class PromptNotFoundError(Exception):
+    """Raised when a prompt key is not registered with the remote registry."""
+
+
 def get_effective_version(prompt: Prompt) -> PromptVersion:
     if len(prompt.versions) == 0:
         raise Exception(f"No versions exist for {prompt.key} prompt")
@@ -55,7 +59,7 @@ class PromptRegistryClient:
     ):
         prompt = self._registry.get_prompt_by_key(key)
         if prompt is None:
-            raise Exception(f"Prompt {key} does not exist")
+            raise PromptNotFoundError(f"Prompt {key} does not exist")
 
         prompt_version = None
         try:
@@ -92,6 +96,8 @@ class PromptRegistryClient:
             prompt_version.name,
             prompt_version.hash,
             variables,
+            prompt.id,
+            prompt_version.id,
         )
 
         return params_dict
