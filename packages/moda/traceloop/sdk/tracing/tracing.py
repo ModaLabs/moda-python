@@ -265,17 +265,19 @@ def get_chained_entity_path(entity_name: str) -> str:
 
 def set_managed_prompt_tracing_context(
     key: str,
-    version,
-    version_name: str,
+    version: Optional[int],
+    version_name: Optional[str],
     version_hash: str,
     template_variables: dict,
-    prompt_id: str = None,
-    version_id: str = None,
+    prompt_id: Optional[str] = None,
+    version_id: Optional[str] = None,
 ) -> None:
     attach(set_value("managed_prompt", True))
     attach(set_value("prompt_key", key))
-    attach(set_value("prompt_version", version))
-    attach(set_value("prompt_version_name", version_name))
+    if version is not None:
+        attach(set_value("prompt_version", version))
+    if version_name is not None:
+        attach(set_value("prompt_version_name", version_name))
     attach(set_value("prompt_version_hash", version_hash))
     attach(set_value("prompt_template_variables", template_variables))
     if prompt_id is not None:
@@ -398,8 +400,6 @@ def default_span_processor_on_start(span: Span, parent_context: Context | None =
         prompt_version_id = get_value("prompt_version_id")
         if prompt_version_id is not None:
             span.set_attribute("moda.prompt_version_id", str(prompt_version_id))
-        elif prompt_version_hash is not None:
-            span.set_attribute("moda.prompt_version_id", str(prompt_version_hash))
 
         prompt_template = get_value("prompt_template")
         if prompt_template is not None:

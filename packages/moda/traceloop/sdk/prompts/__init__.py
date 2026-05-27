@@ -3,10 +3,14 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
-from traceloop.sdk.prompts.client import PromptRegistryClient
+from traceloop.sdk.prompts.client import PromptNotFoundError, PromptRegistryClient
 from traceloop.sdk.tracing.tracing import set_managed_prompt_tracing_context
+
+
+DEFAULT_PROMPT_GLOBS = ("prompts/**/*.prompt.md", "prompts/**/*.prompt.json",
+                        "prompts/**/*.prompt.yml", "prompts/**/*.prompt.yaml")
 
 
 def get_prompt(key, **args):
@@ -18,7 +22,7 @@ class PromptHandle:
         self.key = key
         self.options = options
 
-    def render(self, variables: Dict[str, Any] | None = None, **options):
+    def render(self, variables: Optional[Dict[str, Any]] = None, **options):
         variables = variables or {}
         render_options = {**self.options, **options}
 
@@ -28,9 +32,8 @@ class PromptHandle:
                 variables=variables,
                 **render_options,
             )
-        except Exception as exc:
-            if "does not exist" not in str(exc):
-                raise
+        except PromptNotFoundError:
+            pass
 
         definition = _load_local_prompt(self.key)
         content = _render_template(definition["content"], variables)
@@ -42,7 +45,7 @@ class PromptHandle:
 
         set_managed_prompt_tracing_context(
             self.key,
-            definition.get("version_id") or definition["content_hash"][:12],
+            None,
             definition.get("name"),
             definition["content_hash"],
             variables,
@@ -63,10 +66,15 @@ def prompt(key: str, **options) -> PromptHandle:
 def _load_local_prompt(key: str) -> Dict[str, Any]:
     root = _find_project_root(Path.cwd())
     lock = _read_lock(root)
-    prompt_files = sorted(
-        path for path in (root / "prompts").rglob("*")
-        if path.suffix in {".md", ".json", ".yaml", ".yml"} and ".prompt." in path.name
-    )
+    globs = _read_prompt_paths(root) or DEFAULT_PROMPT_GLOBS
+
+    prompt_files: List[Path] = []
+    seen = set()
+    for pattern in globs:
+        for path in sorted(root.glob(pattern)):
+            if path.is_file() and path not in seen:
+                seen.add(path)
+                prompt_files.append(path)
 
     for path in prompt_files:
         definition = _parse_prompt_file(root, path)
@@ -78,7 +86,7 @@ def _load_local_prompt(key: str) -> Dict[str, Any]:
             definition["source_path"] = locked.get("sourcePath") or definition["source_path"]
             return definition
 
-    raise Exception(f"Prompt {key} does not exist")
+    raise PromptNotFoundError(f"Prompt {key} does not exist")
 
 
 def _find_project_root(cwd: Path) -> Path:
@@ -96,6 +104,40 @@ def _read_lock(root: Path) -> Dict[str, Any]:
     if not lock_path.exists():
         return {}
     return json.loads(lock_path.read_text())
+
+
+def _read_prompt_paths(root: Path) -> List[str]:
+    config_path = root / ".moda" / "prompts.yml"
+    if not config_path.exists():
+        return []
+    paths: List[str] = []
+    in_list = False
+    for raw_line in config_path.read_text().splitlines():
+        line = raw_line.rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        stripped = line.lstrip()
+        if in_list and stripped.startswith("- "):
+            value = stripped[2:].strip().strip("\"'")
+            if value:
+                paths.append(value)
+            continue
+        in_list = False
+        if ":" in line:
+            field, _, value = line.partition(":")
+            if field.strip() == "prompt_paths":
+                remainder = value.strip()
+                if remainder.startswith("[") and remainder.endswith("]"):
+                    inner = remainder[1:-1]
+                    for item in inner.split(","):
+                        cleaned = item.strip().strip("\"'")
+                        if cleaned:
+                            paths.append(cleaned)
+                elif remainder:
+                    paths.append(remainder.strip("\"'"))
+                else:
+                    in_list = True
+    return paths
 
 
 def _parse_prompt_file(root: Path, path: Path) -> Dict[str, Any]:
