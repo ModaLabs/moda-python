@@ -132,15 +132,20 @@ def _set_request_attributes(span, kwargs, instance=None):
     _set_span_attribute(span, GenAIAttributes.GEN_AI_REQUEST_TOP_P, kwargs.get("top_p"))
     # OTel-standard request params the Moda backend's expanded OTLP extractor
     # reads into events_raw.canonical_payload.
+    #
+    # `gen_ai.request.stop_sequences` is declared as `string[]` in the OTel
+    # GenAI semconv. OTel Python's `Span.set_attribute` accepts sequences of
+    # primitives directly — encoding the list as a JSON string would land in
+    # OTLP as `string_value` instead of `array_value` and break spec-aware
+    # consumers.
     stop_value = kwargs.get("stop")
     if stop_value is not None:
-        try:
-            stop_list = stop_value if isinstance(stop_value, list) else [stop_value]
+        stop_list = stop_value if isinstance(stop_value, list) else [stop_value]
+        stop_sequences = [s for s in stop_list if isinstance(s, str)]
+        if stop_sequences:
             _set_span_attribute(
-                span, "gen_ai.request.stop_sequences", json.dumps(stop_list)
+                span, "gen_ai.request.stop_sequences", stop_sequences
             )
-        except Exception:
-            pass
     tools_value = kwargs.get("tools")
     if tools_value:
         try:

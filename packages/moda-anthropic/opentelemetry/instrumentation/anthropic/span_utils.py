@@ -89,14 +89,19 @@ async def aset_input_attributes(span, kwargs):
     # OTel-standard request params the Moda backend's expanded OTLP extractor
     # reads into events_raw.canonical_payload. Anthropic uses `stop_sequences`
     # (list) and `tools` (list of tool defs).
+    #
+    # `gen_ai.request.stop_sequences` is declared as `string[]` in the OTel
+    # GenAI semconv. OTel Python's `Span.set_attribute` accepts sequences of
+    # primitives directly — encoding the list as a JSON string would land in
+    # OTLP as `string_value` instead of `array_value` and break spec-aware
+    # consumers.
     stop_sequences = kwargs.get("stop_sequences")
-    if stop_sequences:
-        try:
+    if isinstance(stop_sequences, list):
+        filtered = [s for s in stop_sequences if isinstance(s, str)]
+        if filtered:
             set_span_attribute(
-                span, "gen_ai.request.stop_sequences", json.dumps(stop_sequences)
+                span, "gen_ai.request.stop_sequences", filtered
             )
-        except Exception:
-            pass
     tools_value = kwargs.get("tools")
     if tools_value:
         try:
@@ -395,15 +400,15 @@ async def aset_response_attributes(span, response):
     set_span_attribute(span, GenAIAttributes.GEN_AI_RESPONSE_MODEL, response.get("model"))
     set_span_attribute(span, GenAIAttributes.GEN_AI_RESPONSE_ID, response.get("id"))
     # Spec key is `gen_ai.response.finish_reasons` (plural, array). Anthropic
-    # returns one stop_reason per response so the array has length 1.
+    # returns one stop_reason per response so the array has length 1. OTel
+    # Python's `Span.set_attribute` accepts sequences of primitives directly;
+    # encoding as a JSON string would land in OTLP as `string_value` instead
+    # of `array_value` and break spec-aware consumers.
     stop_reason = response.get("stop_reason")
-    if stop_reason:
-        try:
-            set_span_attribute(
-                span, "gen_ai.response.finish_reasons", json.dumps([stop_reason])
-            )
-        except Exception:
-            pass
+    if isinstance(stop_reason, str) and stop_reason:
+        set_span_attribute(
+            span, "gen_ai.response.finish_reasons", [stop_reason]
+        )
 
     if response.get("usage"):
         prompt_tokens = response.get("usage").input_tokens
@@ -442,6 +447,14 @@ def set_response_attributes(span, response):
     response = _extract_response_data(response)
     set_span_attribute(span, GenAIAttributes.GEN_AI_RESPONSE_MODEL, response.get("model"))
     set_span_attribute(span, GenAIAttributes.GEN_AI_RESPONSE_ID, response.get("id"))
+    # Spec key is `gen_ai.response.finish_reasons` (plural, array). Mirror the
+    # async path so sync and async callers emit the same shape. Anthropic
+    # returns one stop_reason per response so the array has length 1.
+    stop_reason = response.get("stop_reason")
+    if isinstance(stop_reason, str) and stop_reason:
+        set_span_attribute(
+            span, "gen_ai.response.finish_reasons", [stop_reason]
+        )
 
     if response.get("usage"):
         prompt_tokens = response.get("usage").input_tokens
