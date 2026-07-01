@@ -160,6 +160,59 @@ class TestExternalProviderDetection:
             )
 
 
+    def test_late_provider_processor_attached_once(self):
+        """Repeated (incl. concurrent) re-resolutions must attach Moda's
+        processor to a late provider exactly once — never double-export."""
+        import threading
+
+        external_exporter = InMemorySpanExporter()
+        external_provider = TracerProvider()
+        external_provider.add_span_processor(SimpleSpanProcessor(external_exporter))
+
+        moda_exporter = InMemorySpanExporter()
+
+        with patch(
+            "traceloop.sdk.tracing.tracing.get_tracer_provider"
+        ) as mock_get_provider, patch(
+            "traceloop.sdk.tracing.tracing.trace.set_tracer_provider",
+            lambda provider: None,
+        ):
+            mock_get_provider.return_value = ProxyTracerProvider()
+
+            from traceloop.sdk import Traceloop
+
+            Traceloop.init(
+                app_name="attach-once-test",
+                exporter=moda_exporter,
+                disable_batch=True,
+            )
+
+            mock_get_provider.return_value = external_provider
+
+            # Hammer the use-time re-resolution from several threads at once.
+            barrier = threading.Barrier(8)
+
+            def resolve():
+                barrier.wait()
+                TracerWrapper.instance.get_tracer()
+
+            threads = [threading.Thread(target=resolve) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            tracer = external_provider.get_tracer("test")
+            with tracer.start_as_current_span("test-span") as span:
+                span.set_attribute("test.key", "value")
+
+            moda_spans = moda_exporter.get_finished_spans()
+            assert len(moda_spans) == 1, (
+                f"Moda exporter received {len(moda_spans)} spans, expected exactly 1 "
+                "(processor attached to the late provider more than once)"
+            )
+
+
 class TestMultipleProcessors:
     """Tests that multiple span processors can coexist."""
 

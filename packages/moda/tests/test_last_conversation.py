@@ -45,6 +45,31 @@ def _init_isolated_wrapper():
     )
 
 
+def test_marker_uses_cwd_at_init_not_flush(tmp_path, monkeypatch):
+    """The marker is written relative to the CWD at init, even if the app
+    changes directory before flushing (the watcher watches the launch dir)."""
+    init_dir = tmp_path / "init_here"
+    later_dir = tmp_path / "moved_here"
+    init_dir.mkdir()
+    later_dir.mkdir()
+
+    monkeypatch.chdir(init_dir)
+    with patch(
+        "traceloop.sdk.tracing.tracing.get_tracer_provider",
+        return_value=ProxyTracerProvider(),
+    ), patch(
+        "traceloop.sdk.tracing.tracing.trace.set_tracer_provider",
+        lambda provider: None,
+    ):
+        _init_isolated_wrapper()
+        set_conversation_id_value("conv_cwd")
+        monkeypatch.chdir(later_dir)  # app changes cwd after init
+        Traceloop.flush()
+
+    assert (init_dir / ".moda" / "last-conversation").read_bytes() == b"conv_cwd"
+    assert not (later_dir / ".moda" / "last-conversation").exists()
+
+
 def test_marker_written_on_first_flush(tmp_path, monkeypatch):
     """First flush after setting a conversation id writes the marker file."""
     monkeypatch.chdir(tmp_path)
