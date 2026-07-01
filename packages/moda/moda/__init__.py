@@ -102,6 +102,49 @@ def _resolve_on_error(explicit: "OnError | str | None") -> OnError:
     return resolve_on_error(explicit)
 
 
+def _moda_config_path() -> str:
+    """Absolute path to the CLI-persisted config, honoring MODA_CONFIG_HOME.
+
+    Mirrors the moda CLI, which writes the provisioned API key to
+    ``~/.moda/config.json`` (mode 0600) during ``moda init``.
+    """
+    base = os.environ.get("MODA_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".moda"
+    )
+    return os.path.join(base, "config.json")
+
+
+def _api_key_from_config_file() -> str | None:
+    """Read ``api_key`` from ``~/.moda/config.json`` if present.
+
+    Best-effort: a missing/unreadable/malformed file yields ``None`` so the
+    caller controls the loud-fail message.
+    """
+    import json
+
+    try:
+        with open(_moda_config_path(), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    key = data.get("api_key") if isinstance(data, dict) else None
+    return key if isinstance(key, str) and key else None
+
+
+def _resolve_api_key(explicit: str | None) -> str | None:
+    """Resolve the Moda API key with CLI-matching precedence.
+
+    explicit argument -> MODA_API_KEY env -> ~/.moda/config.json.
+    Returns ``None`` when no source yields a non-empty string.
+    """
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    env = os.environ.get("MODA_API_KEY")
+    if env:
+        return env
+    return _api_key_from_config_file()
+
+
 def init(
     api_key: str | None = None,
     app_name: str | None = None,
@@ -115,7 +158,10 @@ def init(
     """Initialize Moda SDK.
 
     Args:
-        api_key: Your Moda API key. Can also be set via MODA_API_KEY env var.
+        api_key: Your Moda API key. When omitted, it is resolved from the
+            MODA_API_KEY env var and then from ``~/.moda/config.json`` (written
+            by ``moda init``), matching the CLI's precedence. This lets an app
+            authenticate even when MODA_API_KEY was never exported.
         app_name: Optional name for your application.
         endpoint: Custom ingest endpoint. Defaults to Moda's ingest endpoint.
         exporter: Custom OpenTelemetry exporter (for testing/debugging).
@@ -129,8 +175,23 @@ def init(
             the SDK reacts to misconfiguration (e.g. a missing API key or an
             un-attachable tracer provider).
         **kwargs: Additional arguments passed to Moda.init()
+
+    Raises:
+        ValueError: when no API key can be resolved from any source and no
+            custom exporter was supplied (loud-fail contract).
     """
     import logging
+
+    # Resolve the key with CLI-matching precedence before anything else so the
+    # debug output and the loud-fail message both reflect the real source.
+    api_key = _resolve_api_key(api_key)
+    if not api_key and exporter is None:
+        raise ValueError(
+            "[Moda] API key is required, but none was found. Tried, in order: "
+            "the api_key argument, the MODA_API_KEY environment variable, and "
+            f"{_moda_config_path()} (written by `moda init`). "
+            "Run `moda init`, or export MODA_API_KEY, or pass api_key to moda.init()."
+        )
 
     debug_enabled, debug_source = _resolve_debug_enabled(debug)
 
