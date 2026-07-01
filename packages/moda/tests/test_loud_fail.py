@@ -345,6 +345,42 @@ def test_provider_init_failure_leaves_sdk_uninitialized(monkeypatch):
         TracerWrapper.endpoint = saved_endpoint
 
 
+def test_provider_init_throw_leaves_sdk_uninitialized(monkeypatch):
+    """Under throw, init_tracer_provider raises inside TracerWrapper.__new__
+    *after* cls.instance was already assigned.
+
+    A caught ``Moda.init(on_error='throw')`` failure must not leave the partial
+    singleton behind: ``verify_initialized()`` would otherwise report the SDK
+    initialized even though no Moda provider/processor was ever attached, and
+    decorated/manual tracing would run against a stale wrapper.
+    """
+    saved_instance = getattr(TracerWrapper, "instance", None)
+    if hasattr(TracerWrapper, "instance"):
+        del TracerWrapper.instance
+    saved_endpoint = TracerWrapper.endpoint
+    monkeypatch.setattr(TracerWrapper, "on_error", OnError.THROW)
+    monkeypatch.setenv("TRACELOOP_SUPPRESS_WARNINGS", "true")  # quiet the no-op path
+    try:
+        TracerWrapper.set_static_params({}, True, "https://example.test/v1/traces", {})
+        monkeypatch.setattr(
+            tracing_mod, "get_tracer_provider", lambda: _NoProcessorProvider()
+        )
+
+        # The un-attachable provider must fail loudly ...
+        with pytest.raises(ModaExporterError):
+            TracerWrapper()
+
+        # ... and must NOT leave a registered-but-broken singleton behind.
+        assert not hasattr(TracerWrapper, "instance")
+        assert TracerWrapper.verify_initialized() is False
+    finally:
+        if hasattr(TracerWrapper, "instance"):
+            del TracerWrapper.instance
+        if saved_instance is not None:
+            TracerWrapper.instance = saved_instance
+        TracerWrapper.endpoint = saved_endpoint
+
+
 def test_provider_init_healthy_still_returns_provider(monkeypatch):
     # Sanity: a normal (Proxy) global provider still yields a real provider and
     # never trips the loud-fail path regardless of mode.

@@ -101,11 +101,23 @@ class TracerWrapper(object):
 
             obj.__image_uploader = image_uploader
             obj.__resource = Resource.create(TracerWrapper.resource_attributes)
-            obj.__tracer_provider = init_tracer_provider(
-                resource=obj.__resource,
-                sampler=sampler,
-                on_error=TracerWrapper.on_error,
-            )
+            try:
+                obj.__tracer_provider = init_tracer_provider(
+                    resource=obj.__resource,
+                    sampler=sampler,
+                    on_error=TracerWrapper.on_error,
+                )
+            except Exception:
+                # Under on_error='throw', an un-attachable OpenTelemetry provider
+                # raises (ModaExporterError) here — after cls.instance was
+                # already assigned above. Drop the partial singleton before
+                # re-raising so a caught Moda.init(on_error='throw') failure
+                # leaves the SDK honestly uninitialized (verify_initialized() ->
+                # False) instead of reporting a never-attached provider as
+                # initialized. The actionable error still propagates to the caller.
+                if hasattr(cls, "instance"):
+                    del cls.instance
+                raise
             if obj.__tracer_provider is None:
                 # The active OpenTelemetry provider could not accept Moda's span
                 # processor and on_error was not 'throw' (that path already
