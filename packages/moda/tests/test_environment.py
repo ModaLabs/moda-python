@@ -71,6 +71,10 @@ def fresh_init():
         if hasattr(TracerWrapper, "instance"):
             del TracerWrapper.instance
         exp = InMemorySpanExporter()
+        # Pass a fresh resource_attributes per call: Moda.init mutates the dict
+        # it is given, and the default arg is a shared mutable dict, so reusing
+        # it would leak resolved values across independent inits.
+        kwargs.setdefault("resource_attributes", {})
         Traceloop.init(
             app_name="test-env",
             disable_batch=True,
@@ -129,6 +133,43 @@ def test_explicit_arg_wins_over_env_var(fresh_init, monkeypatch):
 
     assert TracerWrapper.resource_attributes["moda.environment"] == "explicit"
     assert TracerWrapper.resource_attributes["deployment.environment"] == "explicit"
+
+
+def test_caller_provided_resource_attribute_is_respected(fresh_init, monkeypatch):
+    # No explicit arg / env var: a caller-provided resource attribute must not
+    # be clobbered by the 'production' default.
+    monkeypatch.delenv("MODA_ENVIRONMENT", raising=False)
+    fresh_init(resource_attributes={"moda.environment": "caller-set"})
+
+    assert TracerWrapper.resource_attributes["moda.environment"] == "caller-set"
+    assert TracerWrapper.resource_attributes["deployment.environment"] == "caller-set"
+
+
+def test_explicit_arg_overrides_caller_resource_attribute(fresh_init, monkeypatch):
+    monkeypatch.delenv("MODA_ENVIRONMENT", raising=False)
+    fresh_init(
+        environment="explicit",
+        resource_attributes={"moda.environment": "caller-set"},
+    )
+
+    assert TracerWrapper.resource_attributes["moda.environment"] == "explicit"
+    assert TracerWrapper.resource_attributes["deployment.environment"] == "explicit"
+
+
+def test_blank_environment_falls_back_to_default(fresh_init, monkeypatch):
+    monkeypatch.delenv("MODA_ENVIRONMENT", raising=False)
+    fresh_init(environment="   ")
+
+    assert TracerWrapper.resource_attributes["moda.environment"] == "production"
+    assert TracerWrapper.resource_attributes["deployment.environment"] == "production"
+
+
+def test_blank_environment_falls_back_to_env_var(fresh_init, monkeypatch):
+    monkeypatch.setenv("MODA_ENVIRONMENT", "from-env")
+    fresh_init(environment="")
+
+    assert TracerWrapper.resource_attributes["moda.environment"] == "from-env"
+    assert TracerWrapper.resource_attributes["deployment.environment"] == "from-env"
 
 
 # --------------------------------------------------------------------------- #
