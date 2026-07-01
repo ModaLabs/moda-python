@@ -492,3 +492,32 @@ def test_flush_silent_debug_logs(monkeypatch, caplog):
     with caplog.at_level(logging.DEBUG, logger="traceloop.sdk.tracing.tracing"):
         assert wrapper.flush() is False
     assert "never initialized" in caplog.text
+
+
+# --- Contract-surface acceptance (reconciled from the PY-1 serial root) ----
+# These four assertions come from the loud-fail *contract* branch and guard the
+# type hierarchy and public import surface that sibling WS-SDK-PY issues depend
+# on. They complement the runtime-path coverage above.
+
+def test_missing_api_key_error_is_config_error():
+    assert issubclass(ModaMissingApiKeyError, ModaConfigError)
+
+
+def test_public_import_surface():
+    # Acceptance: this import must succeed for sibling issues.
+    from traceloop.sdk.errors import (  # noqa: F401
+        OnError as _OnError,
+        ModaConfigError as _ModaConfigError,
+        handle_config_issue as _handle,
+    )
+
+
+def test_handle_warn_prints_without_raising(capsys):
+    handle_config_issue("heads up", on_error="warn")
+    assert "heads up" in capsys.readouterr().out
+
+
+def test_handle_silent_debug_logs(caplog):
+    with caplog.at_level(logging.DEBUG):
+        handle_config_issue("quiet", on_error="silent", logger=logging.getLogger("moda.test"))
+    assert "quiet" in caplog.text
