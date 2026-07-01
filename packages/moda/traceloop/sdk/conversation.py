@@ -15,6 +15,9 @@ _conversation_id_var: ContextVar[Optional[str]] = ContextVar(
     "conversation_id", default=None
 )
 _user_id_var: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
+_environment_var: ContextVar[Optional[str]] = ContextVar(
+    "environment", default=None
+)
 
 
 def compute_conversation_id(messages: list[dict]) -> str:
@@ -107,6 +110,15 @@ def get_user_id() -> Optional[str]:
     return _user_id_var.get()
 
 
+def get_environment() -> Optional[str]:
+    """Get the current environment override from context.
+
+    Returns:
+        The environment name if set for the current context, None otherwise.
+    """
+    return _environment_var.get()
+
+
 def _set_conversation_id(conversation_id: Optional[str]) -> None:
     """Internal function to set conversation ID in context."""
     _conversation_id_var.set(conversation_id)
@@ -115,3 +127,8 @@ def _set_conversation_id(conversation_id: Optional[str]) -> None:
 def _set_user_id(user_id: Optional[str]) -> None:
     """Internal function to set user ID in context."""
     _user_id_var.set(user_id)
+
+
+def _set_environment(environment: Optional[str]) -> None:
+    """Internal function to set the environment override in context."""
+    _environment_var.set(environment)

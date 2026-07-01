@@ -34,6 +34,7 @@ from traceloop.sdk.errors import (
     ModaExporterError,
     handle_config_issue,
 )
+from traceloop.sdk.conversation import get_environment
 from traceloop.sdk.images.image_uploader import ImageUploader
 from traceloop.sdk.instruments import Instruments
 from traceloop.sdk.tracing.content_allow_list import ContentAllowList
@@ -471,6 +472,11 @@ def default_span_processor_on_start(span: Span, parent_context: Context | None =
     entity_path = get_value("entity_path")
     if entity_path is not None:
         span.set_attribute(SpanAttributes.TRACELOOP_ENTITY_PATH, str(entity_path))
+
+    # Span-level environment override (wins over the resource-level default).
+    environment = get_environment()
+    if environment is not None:
+        span.set_attribute("moda.environment", str(environment))
 
     association_properties = get_value("association_properties")
     if association_properties is not None and isinstance(association_properties, dict):

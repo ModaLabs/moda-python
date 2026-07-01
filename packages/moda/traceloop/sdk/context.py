@@ -10,8 +10,10 @@ from typing import Generator, Optional
 
 from traceloop.sdk.conversation import (
     _set_conversation_id,
+    _set_environment,
     _set_user_id,
     get_conversation_id,
+    get_environment,
     get_user_id,
 )
 
@@ -68,6 +70,34 @@ def set_user_id(user_id: str) -> Generator[None, None, None]:
         _set_user_id(previous)
 
 
+@contextmanager
+def set_environment(environment: str) -> Generator[None, None, None]:
+    """Context manager for overriding the environment for a block of calls.
+
+    Use this to override the resource-level environment (set at init time via
+    the ``environment`` param or the ``MODA_ENVIRONMENT`` env var) for spans
+    created within the block. This stamps ``moda.environment`` directly onto
+    those spans, which wins over the resource-level default.
+
+    Example:
+        with moda.set_environment("canary"):
+            client.chat.completions.create(...)
+            # All spans here carry moda.environment="canary"
+
+    Args:
+        environment: The environment name to use within this context.
+
+    Yields:
+        None
+    """
+    previous = get_environment()
+    try:
+        _set_environment(environment)
+        yield
+    finally:
+        _set_environment(previous)
+
+
 def set_conversation_id_value(conversation_id: Optional[str]) -> None:
     """Set the conversation ID without using a context manager.
 
@@ -90,3 +120,15 @@ def set_user_id_value(user_id: Optional[str]) -> None:
         user_id: The user ID to set, or None to clear.
     """
     _set_user_id(user_id)
+
+
+def set_environment_value(environment: Optional[str]) -> None:
+    """Set the environment override without using a context manager.
+
+    This is useful when you want to override the resource-level environment
+    that persists across multiple operations without nesting.
+
+    Args:
+        environment: The environment name to set, or None to clear.
+    """
+    _set_environment(environment)

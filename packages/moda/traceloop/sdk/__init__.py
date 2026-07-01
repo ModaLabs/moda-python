@@ -55,13 +55,16 @@ from traceloop.sdk.associations.associations import AssociationProperty as Assoc
 from traceloop.sdk.context import (
     set_conversation_id,
     set_user_id,
+    set_environment,
     set_conversation_id_value,
     set_user_id_value,
+    set_environment_value,
 )
 from traceloop.sdk.conversation import (
     compute_conversation_id,
     get_conversation_id,
     get_user_id,
+    get_environment,
 )
 
 # Re-export for convenience
@@ -71,10 +74,13 @@ __all__ = [
     "flush",
     "set_conversation_id",
     "set_user_id",
+    "set_environment",
     "set_conversation_id_value",
     "set_user_id_value",
+    "set_environment_value",
     "get_conversation_id",
     "get_user_id",
+    "get_environment",
     "compute_conversation_id",
     "set_association_properties",
     "AssociationProperty",
@@ -125,6 +131,7 @@ class Moda:
         sampler: Optional[Sampler] = None,
         should_enrich_metrics: bool = True,
         resource_attributes: dict = {},
+        environment: Optional[str] = None,
         instruments: Optional[Set[Instruments]] = None,
         block_instruments: Optional[Set[Instruments]] = None,
         image_uploader: Optional[ImageUploader] = None,
@@ -150,6 +157,10 @@ class Moda:
             sampler: Custom sampler.
             should_enrich_metrics: Whether to enrich metrics with additional data.
             resource_attributes: Additional resource attributes.
+            environment: Deployment environment name (e.g. 'development', 'staging',
+                'production'). Resolved as explicit arg > MODA_ENVIRONMENT env var >
+                'production'. Stamped on the resource as both 'moda.environment' and
+                'deployment.environment'.
             instruments: Set of instruments to enable.
             block_instruments: Set of instruments to disable.
             image_uploader: Custom image uploader.
@@ -259,6 +270,22 @@ class Moda:
 
         # Tracer init
         resource_attributes.update({SERVICE_NAME: app_name})
+
+        # Resolve environment: explicit arg > MODA_ENVIRONMENT env var > default.
+        # Mirrors the Node SDK, which defaults to 'production' and stamps both
+        # 'moda.environment' and 'deployment.environment' on the resource.
+        resolved_environment = (
+            environment
+            or os.getenv("MODA_ENVIRONMENT")
+            or "production"
+        )
+        resource_attributes.update(
+            {
+                "moda.environment": resolved_environment,
+                "deployment.environment": resolved_environment,
+            }
+        )
+
         TracerWrapper.set_static_params(
             resource_attributes, enable_content_tracing, api_endpoint, headers
         )
