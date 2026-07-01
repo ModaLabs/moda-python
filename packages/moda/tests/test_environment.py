@@ -158,17 +158,20 @@ def test_explicit_arg_overrides_caller_resource_attribute(fresh_init, monkeypatc
     assert TracerWrapper.resource_attributes["deployment.environment"] == "explicit"
 
 
-def test_blank_environment_falls_back_to_default(fresh_init, monkeypatch):
-    monkeypatch.delenv("MODA_ENVIRONMENT", raising=False)
-    fresh_init(environment="   ")
-
-    assert TracerWrapper.resource_attributes["moda.environment"] == "production"
-    assert TracerWrapper.resource_attributes["deployment.environment"] == "production"
-
-
-def test_blank_environment_falls_back_to_env_var(fresh_init, monkeypatch):
+def test_explicit_empty_environment_wins_over_env_var(fresh_init, monkeypatch):
+    # An explicitly-provided value (even empty) has priority and is stamped
+    # verbatim; it must not silently inherit MODA_ENVIRONMENT.
     monkeypatch.setenv("MODA_ENVIRONMENT", "from-env")
     fresh_init(environment="")
+
+    assert TracerWrapper.resource_attributes["moda.environment"] == ""
+    assert TracerWrapper.resource_attributes["deployment.environment"] == ""
+
+
+def test_none_environment_uses_env_var_not_default(fresh_init, monkeypatch):
+    # Only a None arg (not provided) consults the ambient env var.
+    monkeypatch.setenv("MODA_ENVIRONMENT", "from-env")
+    fresh_init(environment=None)
 
     assert TracerWrapper.resource_attributes["moda.environment"] == "from-env"
     assert TracerWrapper.resource_attributes["deployment.environment"] == "from-env"
