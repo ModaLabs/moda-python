@@ -18,6 +18,8 @@ those attributes. Span-level stamping is exercised through the real SDK tracer
 so the on-start hook runs.
 """
 
+import threading
+
 import pytest
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -195,6 +197,21 @@ def test_span_level_override_wins_over_resource_default(exporter):
     # resource default (which carries moda.environment).
     assert outside.attributes.get("moda.environment") is None
     assert "moda.environment" in outside.resource.attributes
+
+
+def test_span_override_propagates_to_worker_threads(exporter):
+    # The override is stored in the OTEL context, which the SDK's
+    # ThreadingInstrumentor propagates to threads started inside the block.
+    def worker():
+        _emit_span("threaded")
+
+    with moda.set_environment("canary"):
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+    threaded = {s.name: s for s in exporter.get_finished_spans()}["threaded"]
+    assert threaded.attributes.get("moda.environment") == "canary"
 
 
 def test_set_environment_restores_previous_on_exit():

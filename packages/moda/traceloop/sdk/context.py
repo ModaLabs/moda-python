@@ -8,12 +8,14 @@ context block.
 from contextlib import contextmanager
 from typing import Generator, Optional
 
+from opentelemetry.context import attach, detach, set_value
+
 from traceloop.sdk.conversation import (
+    _ENVIRONMENT_CONTEXT_KEY,
     _set_conversation_id,
     _set_environment,
     _set_user_id,
     get_conversation_id,
-    get_environment,
     get_user_id,
 )
 
@@ -90,12 +92,14 @@ def set_environment(environment: str) -> Generator[None, None, None]:
     Yields:
         None
     """
-    previous = get_environment()
+    # Attach to the OTEL context so the override propagates to worker threads
+    # (via the SDK's ThreadingInstrumentor); detach restores the exact previous
+    # context on exit, including nested overrides.
+    token = attach(set_value(_ENVIRONMENT_CONTEXT_KEY, environment))
     try:
-        _set_environment(environment)
         yield
     finally:
-        _set_environment(previous)
+        detach(token)
 
 
 def set_conversation_id_value(conversation_id: Optional[str]) -> None:
