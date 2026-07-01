@@ -10,14 +10,22 @@ import uuid
 from contextvars import ContextVar
 from typing import Optional
 
+from opentelemetry.context import attach, get_value, set_value
+
 # Context variables for conversation and user tracking
 _conversation_id_var: ContextVar[Optional[str]] = ContextVar(
     "conversation_id", default=None
 )
 _user_id_var: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
-_environment_var: ContextVar[Optional[str]] = ContextVar(
-    "environment", default=None
-)
+
+# The environment override is stored in the OpenTelemetry context (rather than a
+# bare ContextVar) so it propagates to worker threads via the SDK's
+# ThreadingInstrumentor. This matters because the override is stamped in the
+# shared span on-start hook, which also runs for spans created in worker threads
+# whose OTEL parent context is propagated. The other attributes stamped there
+# (workflow name, entity path, association properties) read from the OTEL
+# context for the same reason.
+_ENVIRONMENT_CONTEXT_KEY = "moda_environment"
 
 
 def compute_conversation_id(messages: list[dict]) -> str:
@@ -116,7 +124,7 @@ def get_environment() -> Optional[str]:
     Returns:
         The environment name if set for the current context, None otherwise.
     """
-    return _environment_var.get()
+    return get_value(_ENVIRONMENT_CONTEXT_KEY)
 
 
 def _set_conversation_id(conversation_id: Optional[str]) -> None:
@@ -130,5 +138,10 @@ def _set_user_id(user_id: Optional[str]) -> None:
 
 
 def _set_environment(environment: Optional[str]) -> None:
-    """Internal function to set the environment override in context."""
-    _environment_var.set(environment)
+    """Internal function to set the environment override in the OTEL context.
+
+    Attaches without detaching, so the value persists for the current context
+    (used by set_environment_value). The scoped context manager uses attach +
+    detach for balanced restore.
+    """
+    attach(set_value(_ENVIRONMENT_CONTEXT_KEY, environment))
