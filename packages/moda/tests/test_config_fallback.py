@@ -58,12 +58,29 @@ def test_config_file_fallback_when_env_absent(tmp_path):
 
 
 def test_loud_fail_when_no_source(tmp_path):
+    # The missing-key path is unified onto the loud-fail contract: under
+    # ``on_error='throw'`` it raises. The raised error is a ModaMissingApiKeyError,
+    # which subclasses ValueError, so a bare ``pytest.raises(ValueError)`` still
+    # catches it. The message must still name every source the bridge tried.
     with pytest.raises(ValueError) as excinfo:
-        moda.init()
+        moda.init(on_error="throw")
     message = str(excinfo.value)
     assert "MODA_API_KEY" in message
     assert "config.json" in message
     assert "moda init" in message
+
+
+def test_missing_key_warns_but_does_not_crash_by_default(tmp_path, capsys):
+    # Coexistence (SERIAL-ROOT loud-fail default): with no key and the default
+    # 'warn' mode, moda.init() must NOT raise — it prints the actionable message
+    # and returns without constructing the SDK. This is what keeps a caller's app
+    # from crashing merely because a key was never configured.
+    moda.init()
+    out = capsys.readouterr().out
+    assert "Missing Moda API key" in out
+    assert "config.json" in out
+    # No SDK instance is built on the no-key/warn path.
+    assert _DummyModa.last_instance is None
 
 
 def test_no_loud_fail_when_exporter_supplied(tmp_path):
@@ -74,8 +91,9 @@ def test_no_loud_fail_when_exporter_supplied(tmp_path):
 
 def test_malformed_config_is_tolerated(tmp_path):
     (tmp_path / "config.json").write_text("{ not json", encoding="utf-8")
+    # Malformed config == no resolvable key; under 'throw' this loud-fails.
     with pytest.raises(ValueError):
-        moda.init()
+        moda.init(on_error="throw")
 
 
 def test_config_path_honors_env(monkeypatch, tmp_path):

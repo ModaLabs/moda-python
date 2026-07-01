@@ -51,26 +51,68 @@ _ISOLATED_ENV = [
 
 
 @pytest.fixture
-def clean_env(monkeypatch):
+def clean_env(monkeypatch, tmp_path):
     for var in _ISOLATED_ENV:
         monkeypatch.delenv(var, raising=False)
+    # TEST-ONLY: the MODA-584 credential bridge in ``moda.init`` resolves the API
+    # key from ``~/.moda/config.json`` when env vars are absent. On a developer
+    # machine that file exists with a real key, so clearing the env vars alone
+    # would NOT reproduce the missing-key path — ``moda.init`` would silently
+    # authenticate from the file. Redirect the config home to an empty tmp dir
+    # (honored by ``moda._moda_config_path`` via MODA_CONFIG_HOME) so the
+    # config-file source yields no key and the loud-fail guard is exercised.
+    monkeypatch.setenv("MODA_CONFIG_HOME", str(tmp_path))
     return monkeypatch
+
+
+@pytest.fixture
+def configured_key(clean_env):
+    """A cleaned env that ALSO has a valid API key configured.
+
+    TEST-ONLY. The MODA-584 credential bridge unified ``moda.init``'s
+    missing-key guard onto the loud-fail contract and runs it *before* the
+    intentional opt-outs (``enabled=False`` / tracing-disabled) and before
+    forwarding the resolved ``on_error`` into ``Moda.init``. So under
+    ``on_error='throw'`` a genuinely key-less env now loud-fails on the key
+    *before* the opt-out is honored. Tests whose intent is the opt-out / on_error
+    resolution behavior (NOT the missing-key path) need a key present so init
+    gets past the credential guard. We set ``MODA_API_KEY`` (highest-priority
+    non-arg source) to model a machine where ``moda init`` has been run — this is
+    setup, not an assertion change.
+    """
+    clean_env.setenv("MODA_API_KEY", "moda_test_key_for_optout")
+    return clean_env
 
 
 @pytest.fixture(autouse=True)
 def _restore_global_tracer_state():
-    """Restore process-wide TracerWrapper flags mutated by these tests.
+    """Restore process-wide TracerWrapper flags mutated by these tests, and give
+    every test in this module a genuinely UNINITIALIZED SDK singleton.
 
     ``Moda.init`` sets the class-level ``TracerWrapper.on_error`` on every call
     and ``enabled=False`` flips ``TracerWrapper.__disabled`` to True — both
     persist for the whole session, so without this reset later tests in the
     suite would receive zero spans or an unexpected loud-fail mode. Snapshot and
     restore them around each test.
+
+    TEST-ONLY isolation fix: the session-scoped ``exporter`` fixture (conftest)
+    initializes the ``TracerWrapper`` singleton once. The "fresh init"
+    missing-key tests here call real ``moda.init()`` expecting to hit the
+    uninitialized/missing-key path — but a pre-existing singleton makes
+    ``verify_initialized()`` short-circuit ("Moda exporting traces..." instead of
+    "Missing Moda API key"). We drop the singleton for the duration of each test
+    so those assertions see the true fresh-init behavior. The conftest
+    ``_isolate_global_tracer_state`` fixture snapshots the singleton + global
+    provider and restores them after the test, so dropping it here never leaks to
+    downstream exporter tests.
     """
     saved_on_error = TracerWrapper.on_error
+    saved_disabled = TracerWrapper._TracerWrapper__disabled
+    if hasattr(TracerWrapper, "instance"):
+        del TracerWrapper.instance
     yield
     TracerWrapper.on_error = saved_on_error
-    TracerWrapper.set_disabled(False)
+    TracerWrapper.set_disabled(saved_disabled)
 
 
 # --- Contract shape (mirrors Node: silent | warn | throw) ------------------
@@ -207,7 +249,7 @@ def test_init_explicit_beats_env(clean_env, capsys):
     assert "Missing Moda API key" in capsys.readouterr().out
 
 
-def test_get_on_error_reflects_resolution(clean_env):
+def test_get_on_error_reflects_resolution(configured_key):
     import moda
     from traceloop.sdk import Moda
 
@@ -220,7 +262,7 @@ def test_get_on_error_reflects_resolution(clean_env):
 # (enabled=False and tracing-disabled are configuration, not misconfiguration.)
 # ===========================================================================
 
-def test_init_disabled_flag_never_throws_under_throw(clean_env, capsys):
+def test_init_disabled_flag_never_throws_under_throw(configured_key, capsys):
     import moda
 
     # Self-contradictory combo must not blow up: honor the disable, warn only.
@@ -228,10 +270,10 @@ def test_init_disabled_flag_never_throws_under_throw(clean_env, capsys):
     assert "disabled via init flag" in capsys.readouterr().out
 
 
-def test_init_tracing_disabled_never_throws_under_throw(clean_env, capsys):
+def test_init_tracing_disabled_never_throws_under_throw(configured_key, capsys):
     import moda
 
-    clean_env.setenv("TRACELOOP_TRACING_ENABLED", "false")
+    configured_key.setenv("TRACELOOP_TRACING_ENABLED", "false")
     moda.init(app_name="loud-fail-test", on_error="throw")
     assert "Tracing is disabled" in capsys.readouterr().out
 

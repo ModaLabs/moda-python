@@ -50,12 +50,18 @@ class OnError(str, Enum):
 DEFAULT_ON_ERROR = OnError.WARN
 
 
-class ModaConfigError(Exception):
+class ModaConfigError(ValueError):
     """Raised when the SDK is misconfigured and ``on_error='throw'``.
 
     Mirrors the Node contract's config error type. Sub-types below narrow the
     specific failure so callers/tests can catch them precisely while still being
     able to catch the base ``ModaConfigError``.
+
+    Subclasses :class:`ValueError` so that historical callers/tests that catch a
+    bare ``ValueError`` for a misconfiguration (e.g. the credential-bridge's
+    "API key is required" path) keep working after the missing-key decision was
+    unified onto the loud-fail contract — ``pytest.raises(ValueError)`` still
+    catches a ``ModaMissingApiKeyError`` raised under ``on_error='throw'``.
     """
 
 

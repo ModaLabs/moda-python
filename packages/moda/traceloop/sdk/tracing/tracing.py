@@ -340,6 +340,15 @@ class TracerWrapper(object):
             return
         if host_provider is self.__attached_provider:
             return
+        # The get_tracer()/flush()-time re-resolver (``_reresolve_provider``) may
+        # have already tee'd our processors onto this exact provider (it runs on
+        # any tracer/flush touchpoint, which can precede the first span). Skip to
+        # avoid a double-attach that would double-export every host span.
+        if id(host_provider) in getattr(
+            self, "_TracerWrapper__attached_provider_ids", set()
+        ):
+            self.__attached_provider = host_provider
+            return
 
         for proc in self.__moda_processors:
             try:
@@ -946,27 +955,47 @@ def init_tracer_provider(
     if not isinstance(default_provider, ProxyTracerProvider) and not hasattr(
         default_provider, "add_span_processor"
     ):
-        # MODA-544 coexistence violation: a real, non-proxy global provider is
-        # already installed and it cannot accept Moda's span processor. Moda has
-        # no seam to tee into and refuses to register a forbidden second global
-        # provider. Previously this logged an error and returned a None provider
-        # — a silently broken tracing pipeline. Raise the specific coexistence
-        # error instead. ``TracerProviderCoexistenceError`` is a subtype of
-        # ``ModaExporterError``, so the ``warn``/``silent`` init path in
-        # ``TracerWrapper.__new__`` (which catches it, drops the half-built
-        # singleton, and — under those modes — swallows it) still degrades
-        # gracefully, while ``throw`` and any direct caller see the loud,
-        # actionable error naming the fix.
+        # A real, non-proxy global provider is installed and it cannot accept
+        # Moda's span processor. There are two flavors, reconciled from the two
+        # merged designs (MODA-544 tee-in coexistence vs the WS-SDK-PY loud-fail
+        # graceful-degradation path):
+        #
+        #   (a) A *live, functional* host TracerProvider — it implements
+        #       ``get_tracer`` and is actively minting spans — that merely lacks
+        #       ``add_span_processor``. Moda has no seam to tee into and refuses
+        #       to register a forbidden second global provider. Silently dropping
+        #       Moda's telemetry here would hide a real coexistence break, so we
+        #       fail LOUDLY and unconditionally with ``TracerProviderCoexistenceError``
+        #       (MODA-544's LOCKED rule). It subclasses ``ModaExporterError``, so
+        #       ``TracerWrapper.__new__`` still catches it, drops the half-built
+        #       singleton, and re-raises to the caller.
+        #
+        #   (b) A *degenerate* provider that is neither a proxy nor a usable
+        #       provider (no ``get_tracer``, no ``add_span_processor``) — e.g. a
+        #       foreign stub that can host nothing. This is the classic
+        #       "un-attachable provider" path: route it through the shared
+        #       loud-fail contract so ``throw`` raises ``ModaExporterError`` while
+        #       ``warn``/``silent`` preserve the historical non-raising bail
+        #       (return None) for coexistence.
+        if hasattr(default_provider, "get_tracer"):
+            raise TracerProviderCoexistenceError(
+                "Cannot attach Moda's span processor: the active OpenTelemetry "
+                f"TracerProvider ({type(default_provider).__name__}) does not "
+                "expose add_span_processor(). Refusing to register a second "
+                "global provider. Configure Moda before the host observability "
+                "SDK, or use an SDK TracerProvider that supports "
+                "add_span_processor()."
+            )
+
         handle_config_issue(
             "Cannot attach Moda's span processor: the active OpenTelemetry "
-            f"TracerProvider ({type(default_provider).__name__}) does not expose "
-            "add_span_processor(). Refusing to register a second global provider. "
-            "Let Moda install its own TracerProvider (call moda.init() before "
-            "configuring OpenTelemetry) or provide an SDK TracerProvider that "
-            "supports add_span_processor().",
+            f"TracerProvider ({type(default_provider).__name__}) does not support "
+            "add_span_processor. Let Moda install its own TracerProvider (call "
+            "moda.init() before configuring OpenTelemetry) or provide a "
+            "SDK-compatible TracerProvider.",
             on_error=on_error,
             logger=_logger,
-            error_cls=TracerProviderCoexistenceError,
+            error_cls=ModaExporterError,
         )
         return None
 

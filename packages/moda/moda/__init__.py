@@ -22,6 +22,7 @@ from types import ModuleType
 from typing import Optional
 
 from traceloop.sdk import Instruments, Moda
+from traceloop.sdk.config import is_tracing_enabled
 from traceloop.sdk.errors import (
     OnError,
     ModaConfigError,
@@ -185,13 +186,44 @@ def init(
     # Resolve the key with CLI-matching precedence before anything else so the
     # debug output and the loud-fail message both reflect the real source.
     api_key = _resolve_api_key(api_key)
-    if not api_key and exporter is None:
-        raise ValueError(
-            "[Moda] API key is required, but none was found. Tried, in order: "
-            "the api_key argument, the MODA_API_KEY environment variable, and "
+
+    # Resolve the loud-fail mode up front so the missing-key path honors it.
+    # Precedence: explicit arg > MODA_ON_ERROR env > 'warn'.
+    resolved_on_error = _resolve_on_error(on_error)
+
+    # Missing-key guard, unified onto the loud-fail contract (the WS-SDK-PY
+    # SERIAL ROOT). The credential-bridge (MODA-584) resolves the key from the
+    # api_key arg -> MODA_API_KEY env -> ~/.moda/config.json; if none of those
+    # yield a key (and no custom exporter was supplied, which needs no key), we
+    # dispatch through ``handle_config_issue`` rather than raising a bare
+    # ``ValueError`` unconditionally. That makes the behavior mode-aware:
+    #   * throw  -> raise ModaMissingApiKeyError (a ValueError subtype, so
+    #               callers/tests catching ValueError still catch it),
+    #   * warn   -> print the message and continue (coexistence; never crash a
+    #               caller's app just because a key was not configured),
+    #   * silent -> stay quiet.
+    # The message still names every source the bridge tried (MODA_API_KEY env,
+    # ~/.moda/config.json, and `moda init`) so it is actionable.
+    #
+    # Intentional opt-outs come FIRST: ``enabled=False`` and tracing disabled via
+    # TRACELOOP_TRACING_ENABLED are deliberate configuration, not
+    # misconfiguration. They must reach ``Moda.init`` (which honors them without
+    # ever escalating to ``throw``) rather than being pre-empted by this
+    # missing-key guard — otherwise ``moda.init(enabled=False, on_error='throw')``
+    # would wrongly raise on a missing key it was never going to use.
+    _opted_out = (kwargs.get("enabled") is False) or (not is_tracing_enabled())
+    if not api_key and exporter is None and not _opted_out:
+        handle_config_issue(
+            "Missing Moda API key: none was found. Tried, in order: the api_key "
+            "argument, the MODA_API_KEY environment variable, and "
             f"{_moda_config_path()} (written by `moda init`). "
-            "Run `moda init`, or export MODA_API_KEY, or pass api_key to moda.init()."
+            "Run `moda init`, or export MODA_API_KEY, or pass api_key to moda.init().",
+            on_error=resolved_on_error,
+            error_cls=ModaMissingApiKeyError,
         )
+        # WARN/SILENT fall through with no key: nothing to initialize, so return
+        # before constructing the SDK instance (mirrors the historical no-op).
+        return
 
     debug_enabled, debug_source = _resolve_debug_enabled(debug)
 
@@ -211,10 +243,6 @@ def init(
 
     global _moda_instance
     _moda_instance = Moda()
-
-    # Resolve loud-fail mode here (explicit arg > MODA_ON_ERROR env > 'warn')
-    # and forward the concrete value into Moda.init.
-    resolved_on_error = _resolve_on_error(on_error)
 
     # Only pass api_endpoint if explicitly provided (don't override default with None)
     init_kwargs = {
