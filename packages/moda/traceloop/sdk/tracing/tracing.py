@@ -326,6 +326,15 @@ class TracerWrapper(object):
         return True
 
     def get_tracer(self):
+        # __tracer_provider is None only when init bailed on an un-attachable
+        # OpenTelemetry provider (loud-fail 'warn'/'silent'; 'throw' already
+        # raised). verify_initialized() reports False in that state, so the
+        # decorator paths no-op and never get here — but a caller holding the
+        # bailed wrapper could still call get_tracer() directly. Fall back to the
+        # global tracer so that degrades to a no-op capture instead of crashing
+        # with AttributeError on None. Coexistence: never crash the host app.
+        if self.__tracer_provider is None:
+            return trace.get_tracer(TRACER_NAME)
         return self.__tracer_provider.get_tracer(TRACER_NAME)
 
 
