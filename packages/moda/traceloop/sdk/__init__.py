@@ -235,12 +235,24 @@ class Moda:
         # Tracer init
         resource_attributes.update({SERVICE_NAME: app_name})
 
-        # Resolve environment: explicit arg > MODA_ENVIRONMENT env var > default.
-        # Mirrors the Node SDK, which defaults to 'production' and stamps both
-        # 'moda.environment' and 'deployment.environment' on the resource.
+        # Resolve environment. Precedence, mirroring the Node SDK (which
+        # defaults to 'production'):
+        #   explicit arg > MODA_ENVIRONMENT env var
+        #     > caller-provided resource_attributes > 'production'
+        # Blank/whitespace-only values are treated as absent so an empty arg or
+        # env var falls through rather than stamping an empty environment. Both
+        # 'moda.environment' and 'deployment.environment' are stamped so the
+        # backend maps them identically.
+        def _clean_env(value: Optional[str]) -> Optional[str]:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            return None
+
         resolved_environment = (
-            environment
-            or os.getenv("MODA_ENVIRONMENT")
+            _clean_env(environment)
+            or _clean_env(os.getenv("MODA_ENVIRONMENT"))
+            or _clean_env(resource_attributes.get("moda.environment"))
+            or _clean_env(resource_attributes.get("deployment.environment"))
             or "production"
         )
         resource_attributes.update(
