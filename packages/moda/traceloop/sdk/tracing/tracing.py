@@ -2,6 +2,7 @@ import atexit
 import logging
 import os
 import tempfile
+import threading
 from urllib.parse import urlparse
 
 
@@ -95,6 +96,8 @@ class TracerWrapper(object):
     __last_conversation_written: bool = False
     __moda_span_processors: List[SpanProcessor] = []
     __attached_provider_ids: Set[int] = set()
+    __init_cwd: str
+    __provider_lock: "threading.Lock"
 
     def __new__(
         cls,
@@ -177,12 +180,17 @@ class TracerWrapper(object):
             # attached them to. Lazy re-resolution (``_reresolve_provider``) uses
             # this to attach to a real TracerProvider that is registered *after*
             # moda.init() without double-attaching (init-order robustness).
+            obj.__provider_lock = threading.Lock()
             if hasattr(obj, "_TracerWrapper__spans_processors"):
                 obj.__moda_span_processors = list(obj.__spans_processors)
             else:
                 obj.__moda_span_processors = [obj.__spans_processor]
             obj.__attached_provider_ids = {id(obj.__tracer_provider)}
             obj.__last_conversation_written = False
+            # Resolve the .moda/ dir relative to the CWD at init time (where the
+            # onboarding watcher launched the app), not at flush time — the app
+            # may chdir afterward.
+            obj.__init_cwd = os.getcwd()
 
             if propagator:
                 set_global_textmap(propagator)
@@ -295,20 +303,28 @@ class TracerWrapper(object):
         if resolved is None or id(resolved) in attached:
             return
 
-        for processor in self.__moda_span_processors:
-            resolved.add_span_processor(processor)
-        attached.add(id(resolved))
+        # Double-checked under the lock so concurrent get_tracer()/flush() calls
+        # can't register the same processor twice on the late provider.
+        with self.__provider_lock:
+            if id(resolved) in attached:
+                return
+            for processor in self.__moda_span_processors:
+                resolved.add_span_processor(processor)
+            attached.add(id(resolved))
 
     def _maybe_write_last_conversation_marker(self) -> None:
         """Write the active conversation id to ``.moda/last-conversation`` on the
         first flush that has one.
 
         The CLI VERIFY watcher reads this marker to learn which conversation the
-        app just emitted. Path (``<cwd>/.moda/last-conversation``) and format
-        (the raw conversation id, no trailing newline) match the Node SDK writer
-        so a single CLI watcher reads both. Written atomically (temp + rename),
-        at most once; skipped when no conversation id is set so a later flush can
-        still write it. Write failures route through PY-1's loud-fail contract.
+        app just emitted. The ``.moda/`` dir is resolved relative to the CWD at
+        init time (captured in ``__init_cwd``) — where the watcher launched the
+        app — not the CWD at flush time, since the app may chdir in between. Path
+        (``<init_cwd>/.moda/last-conversation``) and format (the raw conversation
+        id, no trailing newline) match the Node SDK writer so a single CLI
+        watcher reads both. Written atomically (temp + rename), at most once;
+        skipped when no conversation id is set so a later flush can still write
+        it. Write failures route through PY-1's loud-fail contract.
         """
         if self.__last_conversation_written:
             return
@@ -318,27 +334,31 @@ class TracerWrapper(object):
             # Nothing to hand off yet; a later flush may still write it.
             return
 
-        try:
-            moda_dir = os.path.join(os.getcwd(), ".moda")
-            os.makedirs(moda_dir, exist_ok=True)
-            target_path = os.path.join(moda_dir, "last-conversation")
-
-            fd, tmp_path = tempfile.mkstemp(
-                dir=moda_dir, prefix=".last-conversation-", suffix=".tmp"
-            )
+        # Serialize the check-and-write so concurrent first flushes write once.
+        with self.__provider_lock:
+            if self.__last_conversation_written:
+                return
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(conversation_id)
-                os.replace(tmp_path, target_path)
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+                moda_dir = os.path.join(self.__init_cwd, ".moda")
+                os.makedirs(moda_dir, exist_ok=True)
+                target_path = os.path.join(moda_dir, "last-conversation")
 
-            self.__last_conversation_written = True
-        except Exception as exc:  # noqa: BLE001 - routed through loud-fail contract
-            _report_config_issue(
-                f"Moda: failed to write .moda/last-conversation marker: {exc}"
-            )
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=moda_dir, prefix=".last-conversation-", suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        handle.write(conversation_id)
+                    os.replace(tmp_path, target_path)
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+
+                self.__last_conversation_written = True
+            except Exception as exc:  # noqa: BLE001 - routed through loud-fail contract
+                _report_config_issue(
+                    f"Moda: failed to write .moda/last-conversation marker: {exc}"
+                )
 
 
 def set_association_properties(properties: dict) -> None:
