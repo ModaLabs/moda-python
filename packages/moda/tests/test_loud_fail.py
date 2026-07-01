@@ -297,6 +297,46 @@ def test_provider_init_silent_returns_none_no_output(foreign_provider, capsys):
     assert captured.err == ""
 
 
+def test_provider_init_failure_leaves_sdk_uninitialized(monkeypatch):
+    """Regression: an un-attachable provider must not leave a half-initialized
+    singleton behind under warn/silent.
+
+    ``verify_initialized()`` only checks ``hasattr(cls, "instance")``; if the
+    bail path left the (broken, None-provider) instance registered, decorators
+    and manual tracing would treat the SDK as initialized and later crash inside
+    ``get_tracer()`` on the None provider. The bail must instead drop the
+    registration so every tracing entry point gracefully no-ops.
+    """
+    # Preserve and clear the process-wide singleton / static endpoint so we can
+    # drive TracerWrapper.__new__ down the failure branch in isolation.
+    saved_instance = getattr(TracerWrapper, "instance", None)
+    if hasattr(TracerWrapper, "instance"):
+        del TracerWrapper.instance
+    saved_endpoint = TracerWrapper.endpoint
+    monkeypatch.setattr(TracerWrapper, "on_error", OnError.WARN)
+    monkeypatch.setenv("TRACELOOP_SUPPRESS_WARNINGS", "true")  # quiet the no-op path
+    try:
+        # Non-empty endpoint so __new__ proceeds past the early no-endpoint bail.
+        TracerWrapper.set_static_params({}, True, "https://example.test/v1/traces", {})
+        monkeypatch.setattr(
+            tracing_mod, "get_tracer_provider", lambda: _NoProcessorProvider()
+        )
+
+        # Constructing the wrapper must not raise under warn ...
+        TracerWrapper()
+
+        # ... and the broken provider must NOT be reported as initialized, so
+        # decorators/manual tracing skip span creation instead of crashing.
+        assert TracerWrapper.verify_initialized() is False
+        assert not hasattr(TracerWrapper, "instance")
+    finally:
+        if hasattr(TracerWrapper, "instance"):
+            del TracerWrapper.instance
+        if saved_instance is not None:
+            TracerWrapper.instance = saved_instance
+        TracerWrapper.endpoint = saved_endpoint
+
+
 def test_provider_init_healthy_still_returns_provider(monkeypatch):
     # Sanity: a normal (Proxy) global provider still yields a real provider and
     # never trips the loud-fail path regardless of mode.

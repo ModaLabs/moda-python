@@ -111,9 +111,17 @@ class TracerWrapper(object):
                 # processor and on_error was not 'throw' (that path already
                 # raised inside init_tracer_provider). Bail out gracefully rather
                 # than crash with AttributeError on a None provider — this keeps
-                # coexistence intact for 'warn'/'silent'. The instance stays
-                # registered but has no span processor, so flush() below reports
-                # the broken state honestly under 'throw'.
+                # coexistence intact for 'warn'/'silent'.
+                #
+                # Crucially, DROP the singleton registration: verify_initialized()
+                # keys off `cls.instance`, so a registered-but-broken instance
+                # would report the SDK as initialized and a later get_tracer()
+                # (via the @workflow/@task decorators or manual tracing) would
+                # crash on the None provider. Deleting it makes the SDK behave as
+                # "not initialized" — every tracing entry point guards on
+                # verify_initialized() and gracefully no-ops instead.
+                if hasattr(cls, "instance"):
+                    del cls.instance
                 return obj
 
             # Handle multiple processors case
