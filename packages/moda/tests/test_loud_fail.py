@@ -42,6 +42,21 @@ def clean_env(monkeypatch):
     return monkeypatch
 
 
+@pytest.fixture(autouse=True)
+def _restore_tracer_disabled():
+    """Reset the process-wide TracerWrapper disable flag after each test.
+
+    The `enabled=False` tests below call Moda.init, which flips the class-level
+    TracerWrapper.__disabled to True. That flag persists across the whole
+    session, so without this reset every later test in the suite would receive
+    zero spans. Restore it to the enabled default after each test here.
+    """
+    from traceloop.sdk.tracing.tracing import TracerWrapper
+
+    yield
+    TracerWrapper.set_disabled(False)
+
+
 # --- Contract shape (mirrors Node: silent | warn | throw) ------------------
 
 def test_on_error_values_match_node_contract():
