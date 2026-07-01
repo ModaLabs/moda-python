@@ -191,3 +191,29 @@ def test_get_on_error_reflects_resolution(clean_env):
 
     moda.init(app_name="loud-fail-test", on_error="silent")
     assert Moda.get_on_error() is OnError.SILENT
+
+
+# --- Intentional opt-outs are never fatal, even under throw ----------------
+# (enabled=False and tracing-disabled are configuration, not misconfiguration.)
+
+def test_init_disabled_flag_never_throws_under_throw(clean_env, capsys):
+    import moda
+
+    # Self-contradictory combo must not blow up: honor the disable, warn only.
+    moda.init(app_name="loud-fail-test", enabled=False, on_error="throw")
+    assert "disabled via init flag" in capsys.readouterr().out
+
+
+def test_init_tracing_disabled_never_throws_under_throw(clean_env, capsys):
+    import moda
+
+    clean_env.setenv("TRACELOOP_TRACING_ENABLED", "false")
+    moda.init(app_name="loud-fail-test", on_error="throw")
+    assert "Tracing is disabled" in capsys.readouterr().out
+
+
+def test_init_disabled_flag_silent_is_silent(clean_env, capsys):
+    import moda
+
+    moda.init(app_name="loud-fail-test", enabled=False, on_error="silent")
+    assert capsys.readouterr().out == ""

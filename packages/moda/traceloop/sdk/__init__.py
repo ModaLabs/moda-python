@@ -165,6 +165,9 @@ class Moda:
             on_error: Loud-fail mode ('silent' | 'warn' | 'throw'). Resolved via
                 explicit arg > MODA_ON_ERROR env var > default 'warn'. Controls
                 how the SDK reacts to misconfiguration (see traceloop.sdk.errors).
+                Only genuine misconfiguration (a missing API key) is fatal under
+                'throw'; intentional opt-outs (enabled=False, tracing disabled)
+                never raise — they warn (or stay quiet under 'silent').
 
         Returns:
             Client instance if using Moda cloud, None otherwise.
@@ -175,11 +178,18 @@ class Moda:
         on_error = resolve_on_error(on_error)
         Moda.__on_error = on_error
 
+        # Intentional opt-outs (the `enabled=False` flag and tracing disabled via
+        # TRACELOOP_TRACING_ENABLED) are deliberate configuration, not
+        # misconfiguration, so they must never escalate to `throw` — that would
+        # make `moda.init(enabled=False, on_error='throw')` self-contradictory.
+        # They still respect `silent`; only a genuinely missing API key is fatal.
+        opt_out_on_error = OnError.SILENT if on_error is OnError.SILENT else OnError.WARN
+
         if not enabled:
             TracerWrapper.set_disabled(True)
             handle_config_issue(
                 "Moda instrumentation is disabled via init flag",
-                on_error=on_error,
+                on_error=opt_out_on_error,
                 color=Fore.YELLOW,
             )
             return
@@ -200,7 +210,7 @@ class Moda:
         if not is_tracing_enabled():
             handle_config_issue(
                 "Tracing is disabled",
-                on_error=on_error,
+                on_error=opt_out_on_error,
                 color=Fore.YELLOW,
             )
             return
