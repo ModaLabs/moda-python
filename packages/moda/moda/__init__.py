@@ -24,13 +24,16 @@ from traceloop.sdk import Instruments, Moda
 from traceloop.sdk.context import (
     set_conversation_id,
     set_user_id,
+    set_environment,
     set_conversation_id_value,
     set_user_id_value,
+    set_environment_value,
 )
 from traceloop.sdk.conversation import (
     compute_conversation_id,
     get_conversation_id,
     get_user_id,
+    get_environment,
 )
 from moda.openclaw import (
     get_openclaw_env,
@@ -54,6 +57,7 @@ def init(
     app_name: str | None = None,
     endpoint: str | None = None,
     exporter=None,
+    environment: str | None = None,
     debug: bool = False,
     **kwargs,
 ):
@@ -64,6 +68,10 @@ def init(
         app_name: Optional name for your application.
         endpoint: Custom ingest endpoint. Defaults to Moda's ingest endpoint.
         exporter: Custom OpenTelemetry exporter (for testing/debugging).
+        environment: Deployment environment name (e.g. 'development', 'staging',
+            'production'). Resolved as explicit arg > MODA_ENVIRONMENT env var >
+            'production'. Stamped on the resource as 'moda.environment' and
+            'deployment.environment'.
         debug: Enable debug mode - disables batching, enables verbose logging.
         **kwargs: Additional arguments passed to Moda.init()
     """
@@ -95,6 +103,8 @@ def init(
         init_kwargs["app_name"] = app_name
     if endpoint is not None:
         init_kwargs["api_endpoint"] = endpoint
+    if environment is not None:
+        init_kwargs["environment"] = environment
 
     _moda_instance.init(**init_kwargs)
 
@@ -155,6 +165,24 @@ class _ModaModule(ModuleType):
     def user_id(self, value: Optional[str]) -> None:
         set_user_id_value(value)
 
+    @property
+    def environment(self) -> Optional[str]:
+        """Get or set the current environment override.
+
+        This overrides the resource-level environment set at init time for
+        spans created while it is set.
+
+        Example:
+            moda.environment = 'canary'
+            print(moda.environment)  # 'canary'
+            moda.environment = None  # clear
+        """
+        return get_environment()
+
+    @environment.setter
+    def environment(self, value: Optional[str]) -> None:
+        set_environment_value(value)
+
 
 # Replace this module with our property-enabled wrapper
 # This is a standard Python pattern for adding properties to modules
@@ -169,12 +197,16 @@ __all__ = [
     "flush",
     "conversation_id",
     "user_id",
+    "environment",
     "set_conversation_id",
     "set_user_id",
+    "set_environment",
     "set_conversation_id_value",
     "set_user_id_value",
+    "set_environment_value",
     "get_conversation_id",
     "get_user_id",
+    "get_environment",
     "compute_conversation_id",
     "get_openclaw_otel_config",
     "get_openclaw_env",
