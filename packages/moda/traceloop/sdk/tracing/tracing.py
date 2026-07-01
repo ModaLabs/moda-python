@@ -69,6 +69,64 @@ EXCLUDED_URLS = """
     openaipublic.blob.core.windows.net"""
 
 
+# Attribute keys used to tag every span with the deployment environment. This
+# mirrors the moda-node tee-in fix: the ingest worker reads span-level
+# `moda.environment` (overriding the resource-level `deployment.environment`)
+# and, critically, defaults to "production" when neither is present. When Moda
+# tees its SpanProcessor into a *host* provider, that host provider's Resource
+# does not carry Moda's `deployment.environment`, so without a span-level stamp
+# every tee-in trace silently normalizes to production. We therefore stamp
+# `moda.environment` at the span level (on the tee-in path) on the shared
+# on_start path.
+MODA_ENVIRONMENT_ATTRIBUTE = "moda.environment"
+DEPLOYMENT_ENVIRONMENT_ATTRIBUTE = "deployment.environment"
+
+
+class TracerProviderCoexistenceError(ModaExporterError):
+    """Raised when Moda cannot safely tee its SpanProcessor into the active
+    global TracerProvider.
+
+    Per the loud-fail contract, an unsafe tee-in must surface to the caller
+    rather than being swallowed by a library-level ``logging.error`` + silent
+    ``return``. The most common trigger is a host that registered a custom
+    global provider which does not expose ``add_span_processor`` (e.g. a
+    read-only or NoOp-style provider), meaning Moda has no seam to attach to
+    without registering a forbidden second global provider.
+
+    This is a subtype of :class:`ModaExporterError` so it participates in the
+    same shared loud-fail contract as the rest of the SDK: callers that catch
+    ``ModaExporterError`` (or route through ``handle_config_issue``) treat an
+    unsafe tee-in identically to any other un-attachable provider, while callers
+    that want the specific coexistence signal can still catch it by name.
+    """
+
+
+def resolve_moda_environment() -> Optional[str]:
+    """Resolve the deployment environment to stamp on every tee-in span.
+
+    Resolution order (first non-empty wins):
+      1. The ``deployment.environment`` static resource attribute configured on
+         ``TracerWrapper`` (set from ``resource_attributes`` at init).
+      2. The ``MODA_ENVIRONMENT`` environment variable.
+      3. The ``TRACELOOP_ENVIRONMENT`` environment variable (back-compat).
+
+    Returns ``None`` when nothing is configured so callers can decide whether to
+    stamp. We intentionally do NOT fabricate a "production" default here: the
+    whole point of the span-level stamp is to stop tee-in traces from being
+    *defaulted* to production in ingest. If the caller has not declared an
+    environment, we leave the span unstamped and let ingest apply its documented
+    default rather than lying about the environment.
+    """
+    resource_attributes = getattr(TracerWrapper, "resource_attributes", None) or {}
+    env = resource_attributes.get(DEPLOYMENT_ENVIRONMENT_ATTRIBUTE)
+    if not env:
+        env = os.getenv("MODA_ENVIRONMENT") or os.getenv("TRACELOOP_ENVIRONMENT")
+    if env is None:
+        return None
+    env = str(env).strip()
+    return env or None
+
+
 class TracerWrapper(object):
     resource_attributes: dict = {}
     enable_content_tracing: bool = True
@@ -87,6 +145,15 @@ class TracerWrapper(object):
     __attached_provider_ids: Set[int] = set()
     __marker_base_dir: str
     __provider_lock: "threading.Lock"
+    # MODA-544 tee-in re-attach state. ``__moda_processors`` records Moda's own
+    # processor(s); ``__attached_provider`` is the provider they are currently
+    # attached to; ``__reattach_checked`` guards the at-most-once on-first-span
+    # re-check that tees Moda's processors onto a real host provider that
+    # registered AFTER Moda init (init-order race). This is the span-on_start
+    # sibling of ``_reresolve_provider`` (which fires at get_tracer/flush time).
+    __moda_processors: List[SpanProcessor] = []
+    __attached_provider: Optional[TracerProvider] = None
+    __reattach_checked: bool = False
 
     def __new__(
         cls,
@@ -115,13 +182,16 @@ class TracerWrapper(object):
                     on_error=TracerWrapper.on_error,
                 )
             except Exception:
-                # Under on_error='throw', an un-attachable OpenTelemetry provider
-                # raises (ModaExporterError) here — after cls.instance was
-                # already assigned above. Drop the partial singleton before
-                # re-raising so a caught Moda.init(on_error='throw') failure
-                # leaves the SDK honestly uninitialized (verify_initialized() ->
-                # False) instead of reporting a never-attached provider as
-                # initialized. The actionable error still propagates to the caller.
+                # An un-attachable OpenTelemetry provider raises here (a
+                # MODA-544 TracerProviderCoexistenceError, or a ModaExporterError
+                # under on_error='throw') — after cls.instance was already
+                # assigned above. Drop the partial singleton before re-raising so
+                # a caught failure leaves the SDK honestly uninitialized
+                # (verify_initialized() -> False) instead of reporting a
+                # never-attached provider as initialized. The coexistence
+                # violation is a hard, unsafe condition (Moda has no seam to tee
+                # into and refuses a second global), so it surfaces to the caller
+                # regardless of on_error mode. The actionable error propagates.
                 if hasattr(cls, "instance"):
                     del cls.instance
                 raise
@@ -206,6 +276,14 @@ class TracerWrapper(object):
             else:
                 obj.__moda_span_processors = [obj.__spans_processor]
             obj.__attached_provider_ids = {id(obj.__tracer_provider)}
+            # MODA-544 tee-in re-attach state (span-on_start sibling of the
+            # get_tracer/flush-time ``_reresolve_provider``). Shares the same
+            # Moda processor list; ``__attached_provider`` starts at the provider
+            # we attached to at init so the first-span re-check only fires when a
+            # *different* real host provider registers later.
+            obj.__moda_processors = list(obj.__moda_span_processors)
+            obj.__attached_provider = obj.__tracer_provider
+            obj.__reattach_checked = False
             obj.__last_conversation_written = False
             # Base dir for the .moda/last-conversation handoff. Prefer an explicit
             # MODA_PROJECT_DIR (set by the CLI/onboarding launcher to the exact
@@ -237,7 +315,57 @@ class TracerWrapper(object):
     def exit_handler(self):
         self.flush()
 
+    def _reattach_to_host_provider_if_changed(self) -> None:
+        """Tee Moda's span processor(s) onto a real host ``TracerProvider`` that
+        registered *after* ``moda.init()`` (init-order race), at most once, on
+        the first span.
+
+        This is the on-first-span sibling of ``_reresolve_provider`` (which fires
+        at ``get_tracer()``/``flush()`` time). Running it here means host spans
+        start being tee'd as early as possible — the very first span — rather
+        than waiting for the next explicit tracer/flush call. Per the LOCKED
+        MODA-544 coexistence rule we NEVER call ``set_tracer_provider`` here; we
+        only ever ``add_span_processor`` onto the host's existing global.
+
+        Idempotent and cheap: guarded by ``__reattach_checked`` so it runs at
+        most once, and a no-op while only a bare proxy is present or when the
+        host is already the provider we are attached to.
+        """
+        if self.__reattach_checked:
+            return
+        self.__reattach_checked = True
+
+        host_provider = resolve_host_provider()
+        if host_provider is None:
+            return
+        if host_provider is self.__attached_provider:
+            return
+
+        for proc in self.__moda_processors:
+            try:
+                host_provider.add_span_processor(proc)
+            except Exception:  # pragma: no cover - defensive coexistence guard
+                # Never let a host-provider quirk crash the host app's first span.
+                continue
+        self.__attached_provider = host_provider
+        # Keep the get_tracer/flush-time re-resolver in sync so it does not
+        # re-attach the same processors to this provider a second time.
+        try:
+            self.__attached_provider_ids.add(id(host_provider))
+        except Exception:  # pragma: no cover - defensive
+            pass
+
     def _span_processor_on_start(self, span, parent_context):
+        # Re-check for a late-registered host provider (init-order race) before
+        # anything else, so host spans start being tee'd as early as possible.
+        # Bound to the singleton wrapper only — the standalone module-level
+        # ``default_span_processor_on_start`` (used for tee-in without ``self``)
+        # skips this, exactly as the design intends.
+        try:
+            self._reattach_to_host_provider_if_changed()
+        except Exception:  # pragma: no cover - never crash the host's first span
+            pass
+
         default_span_processor_on_start(span, parent_context)
 
         # TODO: this is here only because we need self to be able to access the content allow list
@@ -592,6 +720,27 @@ def init_spans_exporter(api_endpoint: str, headers: Dict[str, str]) -> SpanExpor
             )
 
 
+def _span_resource_has_environment(span) -> bool:
+    """Return True when the span's own Resource already carries the deployment
+    environment (``moda.environment`` or ``deployment.environment``).
+
+    Used to gate the MODA-544 tee-in span-level fallback: on Moda's own provider
+    the resource already declares the environment, so no span-level stamp is
+    needed (and stamping would wrongly shadow the resource default). On the
+    tee-in path the host resource lacks it, so the fallback applies. Defensive:
+    spans without a readable ``resource`` (e.g. lightweight test fakes) are
+    treated as NOT carrying it, so the fallback still runs for them.
+    """
+    resource = getattr(span, "resource", None)
+    attributes = getattr(resource, "attributes", None)
+    if not attributes:
+        return False
+    return bool(
+        attributes.get(MODA_ENVIRONMENT_ATTRIBUTE)
+        or attributes.get(DEPLOYMENT_ENVIRONMENT_ATTRIBUTE)
+    )
+
+
 def default_span_processor_on_start(span: Span, parent_context: Context | None = None):
     """
     Same as _span_processor_on_start but without the usage of self which comes from the sdk, good for standalone usage.
@@ -608,10 +757,31 @@ def default_span_processor_on_start(span: Span, parent_context: Context | None =
     if entity_path is not None:
         span.set_attribute(SpanAttributes.TRACELOOP_ENTITY_PATH, str(entity_path))
 
-    # Span-level environment override (wins over the resource-level default).
+    # Span-level environment stamp (wins over the resource-level default).
+    #
+    # Two complementary sources, checked in priority order:
+    #   1. The per-context override set by ``with moda.set_environment(...)``
+    #      (``get_environment()``). This is the WS-SDK-PY span-level override and
+    #      always wins when present, even on Moda's own provider.
+    #   2. MODA-544 tee-in fallback (``resolve_moda_environment()``): when Moda
+    #      tees its on_start into a *host* provider whose Resource does NOT carry
+    #      Moda's ``deployment.environment``, ingest would otherwise default the
+    #      tee-in trace to "production". We stamp the resolved environment at the
+    #      span level so the tee-in trace reports the truth. This fallback is
+    #      applied ONLY when the span's own resource does not already carry the
+    #      environment — on Moda's own (non-tee) provider the resource already
+    #      carries ``moda.environment``/``deployment.environment``, so a
+    #      redundant span-level stamp would (a) be pointless and (b) wrongly
+    #      shadow the resource default for spans OUTSIDE a set_environment block.
+    #
+    # We never fabricate a "production" default here: if neither source yields a
+    # value, the span is left unstamped and ingest applies its documented default
+    # rather than us lying about the environment.
     environment = get_environment()
+    if environment is None and not _span_resource_has_environment(span):
+        environment = resolve_moda_environment()
     if environment is not None:
-        span.set_attribute("moda.environment", str(environment))
+        span.set_attribute(MODA_ENVIRONMENT_ATTRIBUTE, str(environment))
 
     association_properties = get_value("association_properties")
     if association_properties is not None and isinstance(association_properties, dict):
@@ -696,22 +866,58 @@ def get_default_span_processor(
     return processor
 
 
+def _unwrap_proxy_provider(provider: TracerProvider) -> TracerProvider:
+    """Unwrap a ``ProxyTracerProvider`` that fronts a real ``_delegate``.
+
+    Some hosts (e.g. Sentry) register a proxy-style provider as the global while
+    wiring a real provider behind it as the ``_delegate``. When that delegate is
+    a real, ``add_span_processor``-capable provider we tee into it rather than
+    the proxy shell. If the proxy has no usable delegate we return it unchanged
+    so the caller's own proxy handling applies.
+    """
+    if isinstance(provider, ProxyTracerProvider):
+        delegate = getattr(provider, "_delegate", None)
+        if delegate is not None and hasattr(delegate, "add_span_processor"):
+            return delegate
+    return provider
+
+
 def _resolve_real_provider(provider) -> Optional[TracerProvider]:
     """Return a real (SDK-managed) ``TracerProvider``, or ``None`` if only a
     proxy is present.
 
     Mirrors the Node lazy delegate unwrap (``src/init.ts``): a
     ``ProxyTracerProvider`` is a placeholder for a not-yet-registered real
-    provider. In the Python API a proxy has no ``_delegate`` — it forwards to the
-    module-global ``_TRACER_PROVIDER`` — so a proxy here simply means "no real
-    provider yet". A provider that cannot host span processors is also treated as
-    unusable.
+    provider. In the Python API a bare proxy has no usable ``_delegate`` — it
+    forwards to the module-global ``_TRACER_PROVIDER`` — so a bare proxy here
+    simply means "no real provider yet". A proxy that fronts a real delegate is
+    unwrapped first. A provider that cannot host span processors is also treated
+    as unusable.
     """
-    if provider is None or isinstance(provider, ProxyTracerProvider):
+    if provider is None:
+        return None
+    provider = _unwrap_proxy_provider(provider)
+    if isinstance(provider, ProxyTracerProvider):
         return None
     if not hasattr(provider, "add_span_processor"):
         return None
     return provider
+
+
+def resolve_host_provider() -> Optional[TracerProvider]:
+    """Resolve the currently-active, tee-able host ``TracerProvider``, or ``None``.
+
+    A host provider is tee-able when it is a real provider that exposes
+    ``add_span_processor`` and is not merely a ``ProxyTracerProvider`` shell (a
+    Sentry-style proxy fronting a real ``_delegate`` is unwrapped to that
+    delegate). Returns ``None`` when only a bare proxy is present, i.e. no real
+    global provider has been registered yet.
+
+    This is the MODA-544 coexistence resolver used both at init
+    (``init_tracer_provider``) and by the on-first-span re-check
+    (``TracerWrapper._reattach_to_host_provider_if_changed``).
+    """
+    return _resolve_real_provider(get_tracer_provider())
 
 
 def init_tracer_provider(
@@ -740,21 +946,27 @@ def init_tracer_provider(
     if not isinstance(default_provider, ProxyTracerProvider) and not hasattr(
         default_provider, "add_span_processor"
     ):
-        # A foreign OpenTelemetry TracerProvider is already installed and it
-        # cannot accept Moda's span processor. Previously this logged an error
-        # and returned a None provider — a silently broken tracing pipeline.
-        # Route it through the shared loud-fail contract instead: 'throw' raises
-        # ModaExporterError (naming the fix), 'warn'/'silent' preserve the old
-        # non-raising behavior for coexistence.
+        # MODA-544 coexistence violation: a real, non-proxy global provider is
+        # already installed and it cannot accept Moda's span processor. Moda has
+        # no seam to tee into and refuses to register a forbidden second global
+        # provider. Previously this logged an error and returned a None provider
+        # — a silently broken tracing pipeline. Raise the specific coexistence
+        # error instead. ``TracerProviderCoexistenceError`` is a subtype of
+        # ``ModaExporterError``, so the ``warn``/``silent`` init path in
+        # ``TracerWrapper.__new__`` (which catches it, drops the half-built
+        # singleton, and — under those modes — swallows it) still degrades
+        # gracefully, while ``throw`` and any direct caller see the loud,
+        # actionable error naming the fix.
         handle_config_issue(
             "Cannot attach Moda's span processor: the active OpenTelemetry "
-            f"TracerProvider ({type(default_provider).__name__}) does not support "
-            "add_span_processor. Let Moda install its own TracerProvider (call "
-            "moda.init() before configuring OpenTelemetry) or provide a "
-            "SDK-compatible TracerProvider.",
+            f"TracerProvider ({type(default_provider).__name__}) does not expose "
+            "add_span_processor(). Refusing to register a second global provider. "
+            "Let Moda install its own TracerProvider (call moda.init() before "
+            "configuring OpenTelemetry) or provide an SDK TracerProvider that "
+            "supports add_span_processor().",
             on_error=on_error,
             logger=_logger,
-            error_cls=ModaExporterError,
+            error_cls=TracerProviderCoexistenceError,
         )
         return None
 
