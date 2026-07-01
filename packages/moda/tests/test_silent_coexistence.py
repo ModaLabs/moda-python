@@ -93,9 +93,16 @@ def clean_tracer_wrapper():
     This makes each test behave like a fresh ``moda.init()`` in a new process,
     which is what keeps the silence invariant meaningful and order-independent.
     """
-    # ThreadingInstrumentor is global; uninstrument so Moda's unconditional
-    # re-instrument inside TracerWrapper does not warn "already instrumented".
-    ThreadingInstrumentor().uninstrument()
+    # ThreadingInstrumentor is a global (singleton) instrumentor. Uninstrument it
+    # so Moda's unconditional re-instrument inside TracerWrapper does not warn
+    # "already instrumented". We snapshot its original state and restore it at
+    # teardown so this module never leaves threading context propagation in a
+    # different global state than it found it — symmetric with the TracerWrapper
+    # save/restore below.
+    threading_instrumentor = ThreadingInstrumentor()
+    threading_was_instrumented = threading_instrumentor.is_instrumented_by_opentelemetry
+    if threading_was_instrumented:
+        threading_instrumentor.uninstrument()
 
     if hasattr(TracerWrapper, "instance"):
         saved = TracerWrapper.instance
@@ -109,6 +116,15 @@ def clean_tracer_wrapper():
         TracerWrapper.instance = saved
     elif hasattr(TracerWrapper, "instance"):
         del TracerWrapper.instance
+
+    # Restore ThreadingInstrumentor to exactly the state we found it in. The
+    # test's own moda.init() will have re-instrumented it, so this mainly guards
+    # the case where it started uninstrumented (or init did not run).
+    threading_is_instrumented = threading_instrumentor.is_instrumented_by_opentelemetry
+    if threading_was_instrumented and not threading_is_instrumented:
+        threading_instrumentor.instrument()
+    elif not threading_was_instrumented and threading_is_instrumented:
+        threading_instrumentor.uninstrument()
 
 
 # --------------------------------------------------------------------------- #
@@ -335,8 +351,17 @@ class TestSilentCoexistence:
         def _init_first():
             with _simulate_provider(ProxyTracerProvider()):
                 _init_moda(moda_exp)
+                # Moda's own pipeline must work even though it initialised before
+                # any host provider existed.
+                tracer = TracerWrapper.instance.get_tracer()
+                for name in HOST_SPAN_NAMES:
+                    with tracer.start_as_current_span(name):
+                        pass
 
         _assert_silent(caplog, capsys, _init_first)
+
+        # (c) Moda's own spans land in its own exporter despite init-before-provider.
+        assert len(moda_exp.get_finished_spans()) == len(HOST_SPAN_NAMES)
 
         # Host provider is registered AFTER Moda and emits its workload.
         late_provider, late_exp = _external_provider()
