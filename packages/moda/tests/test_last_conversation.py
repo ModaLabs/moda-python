@@ -53,6 +53,7 @@ def test_marker_uses_cwd_at_init_not_flush(tmp_path, monkeypatch):
     init_dir.mkdir()
     later_dir.mkdir()
 
+    monkeypatch.delenv("MODA_PROJECT_DIR", raising=False)
     monkeypatch.chdir(init_dir)
     with patch(
         "traceloop.sdk.tracing.tracing.get_tracer_provider",
@@ -70,8 +71,37 @@ def test_marker_uses_cwd_at_init_not_flush(tmp_path, monkeypatch):
     assert not (later_dir / ".moda" / "last-conversation").exists()
 
 
+def test_marker_uses_project_dir_env_over_cwd(tmp_path, monkeypatch):
+    """MODA_PROJECT_DIR pins the marker location regardless of the process CWD,
+    even when startup code chdir's *before* moda.init() (the launcher sets this
+    to the exact directory the VERIFY watcher polls)."""
+    project_dir = tmp_path / "project"
+    other_dir = tmp_path / "elsewhere"
+    project_dir.mkdir()
+    other_dir.mkdir()
+
+    monkeypatch.setenv("MODA_PROJECT_DIR", str(project_dir))
+    # App has already chdir'd away before Moda is even initialized.
+    monkeypatch.chdir(other_dir)
+
+    with patch(
+        "traceloop.sdk.tracing.tracing.get_tracer_provider",
+        return_value=ProxyTracerProvider(),
+    ), patch(
+        "traceloop.sdk.tracing.tracing.trace.set_tracer_provider",
+        lambda provider: None,
+    ):
+        _init_isolated_wrapper()
+        set_conversation_id_value("conv_proj")
+        Traceloop.flush()
+
+    assert (project_dir / ".moda" / "last-conversation").read_bytes() == b"conv_proj"
+    assert not (other_dir / ".moda" / "last-conversation").exists()
+
+
 def test_marker_written_on_first_flush(tmp_path, monkeypatch):
     """First flush after setting a conversation id writes the marker file."""
+    monkeypatch.delenv("MODA_PROJECT_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
 
     with patch(

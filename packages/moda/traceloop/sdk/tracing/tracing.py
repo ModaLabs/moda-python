@@ -96,7 +96,7 @@ class TracerWrapper(object):
     __last_conversation_written: bool = False
     __moda_span_processors: List[SpanProcessor] = []
     __attached_provider_ids: Set[int] = set()
-    __init_cwd: str
+    __marker_base_dir: str
     __provider_lock: "threading.Lock"
 
     def __new__(
@@ -187,10 +187,12 @@ class TracerWrapper(object):
                 obj.__moda_span_processors = [obj.__spans_processor]
             obj.__attached_provider_ids = {id(obj.__tracer_provider)}
             obj.__last_conversation_written = False
-            # Resolve the .moda/ dir relative to the CWD at init time (where the
-            # onboarding watcher launched the app), not at flush time — the app
-            # may chdir afterward.
-            obj.__init_cwd = os.getcwd()
+            # Base dir for the .moda/last-conversation handoff. Prefer an explicit
+            # MODA_PROJECT_DIR (set by the CLI/onboarding launcher to the exact
+            # directory it watches — immune to any os.chdir the app does before or
+            # after init); otherwise fall back to the CWD captured here at init
+            # time (still correct when the app only chdir's *after* moda.init()).
+            obj.__marker_base_dir = os.getenv("MODA_PROJECT_DIR") or os.getcwd()
 
             if propagator:
                 set_global_textmap(propagator)
@@ -317,14 +319,14 @@ class TracerWrapper(object):
         first flush that has one.
 
         The CLI VERIFY watcher reads this marker to learn which conversation the
-        app just emitted. The ``.moda/`` dir is resolved relative to the CWD at
-        init time (captured in ``__init_cwd``) — where the watcher launched the
-        app — not the CWD at flush time, since the app may chdir in between. Path
-        (``<init_cwd>/.moda/last-conversation``) and format (the raw conversation
-        id, no trailing newline) match the Node SDK writer so a single CLI
-        watcher reads both. Written atomically (temp + rename), at most once;
-        skipped when no conversation id is set so a later flush can still write
-        it. Write failures route through PY-1's loud-fail contract.
+        app just emitted. The ``.moda/`` dir is resolved against ``__marker_base_dir``
+        (``MODA_PROJECT_DIR`` if the launcher set it, else the CWD captured at init
+        time) — never the CWD at flush time, since the app may chdir in between.
+        Path (``<base>/.moda/last-conversation``) and format (the raw conversation
+        id, no trailing newline) match the Node SDK writer so a single CLI watcher
+        reads both. Written atomically (temp + rename), at most once; skipped when
+        no conversation id is set so a later flush can still write it. Write
+        failures route through PY-1's loud-fail contract.
         """
         if self.__last_conversation_written:
             return
@@ -339,7 +341,7 @@ class TracerWrapper(object):
             if self.__last_conversation_written:
                 return
             try:
-                moda_dir = os.path.join(self.__init_cwd, ".moda")
+                moda_dir = os.path.join(self.__marker_base_dir, ".moda")
                 os.makedirs(moda_dir, exist_ok=True)
                 target_path = os.path.join(moda_dir, "last-conversation")
 
