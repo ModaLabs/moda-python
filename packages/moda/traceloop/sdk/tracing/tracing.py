@@ -47,29 +47,6 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GEN_AI_AGENT_NAME,
 )
 
-try:
-    # PY-1 (WS-SDK-PY serial root) loud-fail contract. Imported defensively so
-    # this module keeps working on branches where PY-1 has not landed yet.
-    from traceloop.sdk.errors import handle_config_issue, resolve_on_error
-except Exception:  # pragma: no cover - fallback until PY-1 merges
-    handle_config_issue = None
-    resolve_on_error = None
-
-
-def _report_config_issue(message: str) -> None:
-    """Route a non-fatal config problem through PY-1's loud-fail contract.
-
-    Falls back to a plain warning log when the loud-fail module is not present.
-    Under ``MODA_ON_ERROR=throw`` the real handler re-raises so the onboarding
-    VERIFY stage stays honest; the default ``warn`` mode keeps this non-fatal.
-    """
-    if handle_config_issue is not None:
-        on_error = resolve_on_error() if resolve_on_error is not None else "warn"
-        handle_config_issue(message, on_error=on_error)
-    else:
-        logging.warning(message)
-
-
 _logger = logging.getLogger(__name__)
 
 TRACER_NAME = "traceloop.tracer"
@@ -488,8 +465,24 @@ class TracerWrapper(object):
 
                 self.__last_conversation_written = True
             except Exception as exc:  # noqa: BLE001 - routed through loud-fail contract
-                _report_config_issue(
-                    f"Moda: failed to write .moda/last-conversation marker: {exc}"
+                # Honor the SAME resolved loud-fail mode as the rest of the SDK
+                # (set by Moda.init via TracerWrapper.set_on_error), not a fresh
+                # env-only re-resolution — otherwise an explicit
+                # moda.init(on_error='throw') would silently ignore an unwritable
+                # marker and leave the onboarding VERIFY handoff file missing
+                # while flush() returned normally. Under 'throw' this raises
+                # ModaExporterError so the failure is loud; 'warn'/'silent'
+                # preserve the non-fatal behavior.
+                on_error = getattr(TracerWrapper, "on_error", OnError.WARN)
+                handle_config_issue(
+                    "Moda failed to write the .moda/last-conversation marker at "
+                    f"{os.path.join(self.__marker_base_dir, '.moda', 'last-conversation')}: "
+                    f"{type(exc).__name__}: {exc}. The onboarding VERIFY handoff "
+                    "file will be missing; check that the directory is writable "
+                    "(or set MODA_PROJECT_DIR to a writable location).",
+                    on_error=on_error,
+                    logger=_logger,
+                    error_cls=ModaExporterError,
                 )
 
 

@@ -14,6 +14,7 @@ from opentelemetry.trace import ProxyTracerProvider
 
 from traceloop.sdk import Traceloop
 from traceloop.sdk.context import set_conversation_id_value
+from traceloop.sdk.errors import ModaExporterError
 from traceloop.sdk.tracing.tracing import TracerWrapper
 
 
@@ -207,3 +208,62 @@ def test_marker_write_failure_is_non_fatal(tmp_path, monkeypatch):
             Traceloop.flush()
 
     assert not (tmp_path / ".moda" / "last-conversation").exists()
+
+
+def test_marker_write_failure_raises_under_throw(tmp_path, monkeypatch):
+    """Under an explicit on_error='throw', an unwritable marker location must
+    fail loudly (ModaExporterError) instead of leaving the VERIFY handoff file
+    silently missing while flush() returns normally."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MODA_ON_ERROR", raising=False)  # prove it's the explicit arg
+
+    with patch(
+        "traceloop.sdk.tracing.tracing.get_tracer_provider",
+        return_value=ProxyTracerProvider(),
+    ), patch(
+        "traceloop.sdk.tracing.tracing.trace.set_tracer_provider",
+        lambda provider: None,
+    ):
+        Traceloop.init(
+            app_name="last-conversation-throw",
+            exporter=InMemorySpanExporter(),
+            disable_batch=True,
+            on_error="throw",
+        )
+        set_conversation_id_value("conv_boom")
+        with patch(
+            "traceloop.sdk.tracing.tracing.tempfile.mkstemp",
+            side_effect=OSError("disk full"),
+        ):
+            with pytest.raises(ModaExporterError):
+                Traceloop.flush()
+
+    assert not (tmp_path / ".moda" / "last-conversation").exists()
+
+
+def test_marker_write_failure_is_silent_under_silent(tmp_path, monkeypatch, capsys):
+    """Under on_error='silent', a marker write failure neither raises nor prints."""
+    monkeypatch.chdir(tmp_path)
+
+    with patch(
+        "traceloop.sdk.tracing.tracing.get_tracer_provider",
+        return_value=ProxyTracerProvider(),
+    ), patch(
+        "traceloop.sdk.tracing.tracing.trace.set_tracer_provider",
+        lambda provider: None,
+    ):
+        Traceloop.init(
+            app_name="last-conversation-silent",
+            exporter=InMemorySpanExporter(),
+            disable_batch=True,
+            on_error="silent",
+        )
+        set_conversation_id_value("conv_quiet")
+        with patch(
+            "traceloop.sdk.tracing.tracing.tempfile.mkstemp",
+            side_effect=OSError("disk full"),
+        ):
+            Traceloop.flush()  # must not raise
+
+    assert not (tmp_path / ".moda" / "last-conversation").exists()
+    assert "last-conversation" not in capsys.readouterr().out
