@@ -323,12 +323,20 @@ def test_provider_init_failure_leaves_sdk_uninitialized(monkeypatch):
         )
 
         # Constructing the wrapper must not raise under warn ...
-        TracerWrapper()
+        wrapper = TracerWrapper()
 
         # ... and the broken provider must NOT be reported as initialized, so
         # decorators/manual tracing skip span creation instead of crashing.
         assert TracerWrapper.verify_initialized() is False
         assert not hasattr(TracerWrapper, "instance")
+
+        # Belt-and-suspenders: even a caller that still holds the bailed wrapper
+        # and calls get_tracer() directly must degrade to a no-op tracer rather
+        # than crash on the None provider (coexistence under warn/silent).
+        tracer = wrapper.get_tracer()
+        assert tracer is not None
+        # A real tracer that can start (and no-op export) spans, not a crash.
+        tracer.start_span("loud-fail-noop").end()
     finally:
         if hasattr(TracerWrapper, "instance"):
             del TracerWrapper.instance
