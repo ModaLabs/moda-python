@@ -41,6 +41,14 @@ from traceloop.sdk.tracing.tracing import (
     set_external_prompt_tracing_context,
 )
 from traceloop.sdk.client.client import Client
+from traceloop.sdk.errors import (
+    OnError,
+    ModaConfigError,
+    ModaMissingApiKeyError,
+    ModaExporterError,
+    handle_config_issue,
+    resolve_on_error,
+)
 from traceloop.sdk.associations.associations import AssociationProperty as AssociationProperty
 from traceloop.sdk.openclaw import (
     get_openclaw_env as _get_openclaw_env,
@@ -81,6 +89,12 @@ __all__ = [
     "get_openclaw_env",
     "trace_openclaw_operation",
     "run_openclaw_cli",
+    # Loud-fail contract (shared with the Node SDK)
+    "OnError",
+    "ModaConfigError",
+    "ModaMissingApiKeyError",
+    "ModaExporterError",
+    "handle_config_issue",
 ]
 
 # Default Moda endpoint
@@ -99,6 +113,9 @@ class Moda:
     __fetcher: Optional[Fetcher] = None
     __app_name: Optional[str] = None
     __client: Optional[Client] = None
+    # Resolved loud-fail mode (shared contract with the Node SDK). Sibling
+    # WS-SDK-PY issues read this to decide how to react to misconfiguration.
+    __on_error: OnError = OnError.WARN
 
     @staticmethod
     def init(
@@ -122,6 +139,7 @@ class Moda:
         block_instruments: Optional[Set[Instruments]] = None,
         image_uploader: Optional[ImageUploader] = None,
         span_postprocess_callback: Optional[Callable[[ReadableSpan], None]] = None,
+        on_error: Optional[OnError] = None,
     ) -> Optional[Client]:
         """Initialize Moda SDK.
 
@@ -146,16 +164,39 @@ class Moda:
             block_instruments: Set of instruments to disable.
             image_uploader: Custom image uploader.
             span_postprocess_callback: Callback for post-processing spans.
+            on_error: Loud-fail mode ('silent' | 'warn' | 'throw'). Resolved via
+                explicit arg > MODA_ON_ERROR env var > default 'warn'. Controls
+                how the SDK reacts to misconfiguration (see traceloop.sdk.errors).
+                Only genuine misconfiguration (a missing API key, an
+                un-attachable tracer provider) is fatal under 'throw'; intentional
+                opt-outs (enabled=False, tracing disabled) never raise — they warn
+                (or stay quiet under 'silent').
 
         Returns:
             Client instance if using Moda cloud, None otherwise.
         """
+        # Resolve the loud-fail mode once, up front, so every misconfig site
+        # below routes through the same contract. Honors MODA_ON_ERROR even when
+        # Moda.init is called directly (not via the moda.init wrapper).
+        on_error = resolve_on_error(on_error)
+        Moda.__on_error = on_error
+        # Share the resolved mode with the tracing layer so its own silent
+        # failure paths (un-attachable provider, flush failures) honor it too.
+        TracerWrapper.set_on_error(on_error)
+
+        # Intentional opt-outs (the `enabled=False` flag and tracing disabled via
+        # TRACELOOP_TRACING_ENABLED) are deliberate configuration, not
+        # misconfiguration, so they must never escalate to `throw` — that would
+        # make `moda.init(enabled=False, on_error='throw')` self-contradictory.
+        # They still respect `silent`; only genuine misconfiguration is fatal.
+        opt_out_on_error = OnError.SILENT if on_error is OnError.SILENT else OnError.WARN
+
         if not enabled:
             TracerWrapper.set_disabled(True)
-            print(
-                Fore.YELLOW
-                + "Moda instrumentation is disabled via init flag"
-                + Fore.RESET
+            handle_config_issue(
+                "Moda instrumentation is disabled via init flag",
+                on_error=opt_out_on_error,
+                color=Fore.YELLOW,
             )
             return
 
@@ -173,7 +214,11 @@ class Moda:
         Moda.__app_name = app_name
 
         if not is_tracing_enabled():
-            print(Fore.YELLOW + "Tracing is disabled" + Fore.RESET)
+            handle_config_issue(
+                "Tracing is disabled",
+                on_error=opt_out_on_error,
+                color=Fore.YELLOW,
+            )
             return
 
         enable_content_tracing = is_content_tracing_enabled()
@@ -196,12 +241,13 @@ class Moda:
             and api_endpoint == DEFAULT_ENDPOINT
             and not api_key
         ):
-            print(
-                Fore.RED
-                + "Error: Missing Moda API key."
-                + " Set the MODA_API_KEY environment variable or pass api_key to init()"
+            handle_config_issue(
+                "Error: Missing Moda API key."
+                " Set the MODA_API_KEY environment variable or pass api_key to init()",
+                on_error=on_error,
+                color=Fore.RED,
+                error_cls=ModaMissingApiKeyError,
             )
-            print(Fore.RESET)
             return
 
         if not exporter and not processor and headers:
@@ -303,6 +349,15 @@ class Moda:
         ) if api_key else None
 
         return Moda.__client
+
+    @staticmethod
+    def get_on_error() -> OnError:
+        """Return the resolved loud-fail mode from the last init() call.
+
+        Sibling WS-SDK-PY features read this to decide how to react to
+        runtime misconfiguration. Defaults to ``OnError.WARN`` before init().
+        """
+        return Moda.__on_error
 
     @staticmethod
     def set_association_properties(properties: dict) -> None:

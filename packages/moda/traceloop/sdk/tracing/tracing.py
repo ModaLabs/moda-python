@@ -29,6 +29,11 @@ from opentelemetry.context import get_value, attach, set_value
 from opentelemetry.instrumentation.threading import ThreadingInstrumentor
 
 from opentelemetry.semconv_ai import SpanAttributes
+from traceloop.sdk.errors import (
+    OnError,
+    ModaExporterError,
+    handle_config_issue,
+)
 from traceloop.sdk.images.image_uploader import ImageUploader
 from traceloop.sdk.instruments import Instruments
 from traceloop.sdk.tracing.content_allow_list import ContentAllowList
@@ -39,6 +44,8 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GEN_AI_AGENT_NAME,
 )
 
+
+_logger = logging.getLogger(__name__)
 
 TRACER_NAME = "traceloop.tracer"
 EXCLUDED_URLS = """
@@ -68,6 +75,11 @@ class TracerWrapper(object):
     __tracer_provider: TracerProvider = None
     __image_uploader: ImageUploader = None
     __disabled: bool = False
+    # Resolved loud-fail mode (shared contract with the Node SDK). Set by
+    # Moda.init so the tracing layer's own silent-failure paths (un-attachable
+    # provider, flush failures) honor the same on_error mode. Defaults to WARN
+    # to preserve today's non-disruptive behavior for coexistence.
+    on_error: OnError = OnError.WARN
 
     def __new__(
         cls,
@@ -90,8 +102,19 @@ class TracerWrapper(object):
             obj.__image_uploader = image_uploader
             obj.__resource = Resource.create(TracerWrapper.resource_attributes)
             obj.__tracer_provider = init_tracer_provider(
-                resource=obj.__resource, sampler=sampler
+                resource=obj.__resource,
+                sampler=sampler,
+                on_error=TracerWrapper.on_error,
             )
+            if obj.__tracer_provider is None:
+                # The active OpenTelemetry provider could not accept Moda's span
+                # processor and on_error was not 'throw' (that path already
+                # raised inside init_tracer_provider). Bail out gracefully rather
+                # than crash with AttributeError on a None provider — this keeps
+                # coexistence intact for 'warn'/'silent'. The instance stays
+                # registered but has no span processor, so flush() below reports
+                # the broken state honestly under 'throw'.
+                return obj
 
             # Handle multiple processors case
             if processor is not None and isinstance(processor, list):
@@ -195,6 +218,16 @@ class TracerWrapper(object):
         TracerWrapper.headers = headers
 
     @classmethod
+    def set_on_error(cls, on_error: OnError) -> None:
+        """Set the resolved loud-fail mode for the tracing layer.
+
+        Called by ``Moda.init`` so the tracing layer's own silent-failure paths
+        (un-attachable provider, flush failures) route through the same shared
+        contract as the rest of the SDK.
+        """
+        cls.on_error = on_error
+
+    @classmethod
     def verify_initialized(cls) -> bool:
         if cls.__disabled:
             return False
@@ -217,11 +250,72 @@ class TracerWrapper(object):
         cls.__disabled = disabled
 
     def flush(self):
+        """Force flush pending spans, honoring the loud-fail contract.
+
+        Under ``on_error='throw'`` a hard export failure (``force_flush`` raising
+        or returning ``False``) or a never-initialized pipeline (no span
+        processor was attached) is surfaced as :class:`ModaExporterError` rather
+        than silently swallowed. Under ``'warn'`` (default) / ``'silent'`` the
+        historical behavior is preserved — failures never raise.
+
+        Returns:
+            bool: True if the flush succeeded (or there was nothing to flush).
+        """
+        on_error = getattr(TracerWrapper, "on_error", OnError.WARN)
+
         if hasattr(self, "_TracerWrapper__spans_processor"):
-            self.__spans_processor.force_flush()
+            return self._force_flush_processor(self.__spans_processor, on_error)
         elif hasattr(self, "_TracerWrapper__spans_processors"):
+            success = True
             for processor in self.__spans_processors:
-                processor.force_flush()
+                if not self._force_flush_processor(processor, on_error):
+                    success = False
+            return success
+
+        # No span processor was ever attached — the tracing pipeline is in a
+        # silently-broken state. Report it honestly so 'throw' fails loudly.
+        handle_config_issue(
+            "Moda flush() called but no span processor is attached — tracing was "
+            "never initialized. Check that moda.init() succeeded (a valid API key "
+            "and a reachable endpoint).",
+            on_error=on_error,
+            logger=_logger,
+            error_cls=ModaExporterError,
+        )
+        return False
+
+    def _force_flush_processor(self, processor, on_error: OnError) -> bool:
+        """Force-flush one processor, routing hard failures through the contract.
+
+        Returns True on success. On a raised exception or an explicit ``False``
+        return from ``force_flush`` it dispatches via ``handle_config_issue``
+        (raising :class:`ModaExporterError` only under ``on_error='throw'``).
+        """
+        try:
+            result = processor.force_flush()
+        except Exception as exc:  # noqa: BLE001 - surfaced via the contract
+            handle_config_issue(
+                "Moda failed to flush spans to the exporter: "
+                f"{type(exc).__name__}: {exc}. Verify the Moda endpoint and API "
+                "key are correct and the collector is reachable.",
+                on_error=on_error,
+                logger=_logger,
+                error_cls=ModaExporterError,
+            )
+            return False
+
+        if result is False:
+            handle_config_issue(
+                "Moda failed to flush spans to the exporter (force_flush timed "
+                "out or was cancelled). Verify the Moda endpoint and API key are "
+                "correct and the collector is reachable.",
+                on_error=on_error,
+                logger=_logger,
+                error_cls=ModaExporterError,
+            )
+            return False
+
+        return True
 
     def get_tracer(self):
         return self.__tracer_provider.get_tracer(TRACER_NAME)
@@ -433,8 +527,10 @@ def get_default_span_processor(
 
 
 def init_tracer_provider(
-    resource: Resource, sampler: Optional[Sampler] = None
-) -> TracerProvider:
+    resource: Resource,
+    sampler: Optional[Sampler] = None,
+    on_error: OnError = OnError.WARN,
+) -> Optional[TracerProvider]:
     provider: TracerProvider = None
     default_provider: TracerProvider = get_tracer_provider()
 
@@ -445,10 +541,23 @@ def init_tracer_provider(
             provider = TracerProvider(resource=resource)
         trace.set_tracer_provider(provider)
     elif not hasattr(default_provider, "add_span_processor"):
-        logging.error(
-            "Cannot add span processor to the default provider since it doesn't support it"
+        # A foreign OpenTelemetry TracerProvider is already installed and it
+        # cannot accept Moda's span processor. Previously this logged an error
+        # and returned a None provider — a silently broken tracing pipeline.
+        # Route it through the shared loud-fail contract instead: 'throw' raises
+        # ModaExporterError (naming the fix), 'warn'/'silent' preserve the old
+        # non-raising behavior for coexistence.
+        handle_config_issue(
+            "Cannot attach Moda's span processor: the active OpenTelemetry "
+            f"TracerProvider ({type(default_provider).__name__}) does not support "
+            "add_span_processor. Let Moda install its own TracerProvider (call "
+            "moda.init() before configuring OpenTelemetry) or provide a "
+            "SDK-compatible TracerProvider.",
+            on_error=on_error,
+            logger=_logger,
+            error_cls=ModaExporterError,
         )
-        return
+        return None
     else:
         provider = default_provider
 
