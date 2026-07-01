@@ -272,25 +272,26 @@ class Moda:
         resource_attributes.update({SERVICE_NAME: app_name})
 
         # Resolve environment. Precedence, mirroring the Node SDK (which
-        # defaults to 'production'):
+        # defaults to 'production' and stamps the explicit value verbatim):
         #   explicit arg > MODA_ENVIRONMENT env var
         #     > caller-provided resource_attributes > 'production'
-        # Blank/whitespace-only values are treated as absent so an empty arg or
-        # env var falls through rather than stamping an empty environment. Both
+        # "Explicit arg" means the caller passed anything other than None. An
+        # explicitly-provided value always wins and is stamped verbatim — even
+        # an empty string — so it never silently inherits MODA_ENVIRONMENT or
+        # the default (the explicit argument has priority). Only when the arg is
+        # None do the ambient sources apply, where a blank value means "unset"
+        # (os.getenv returns None when unset; empty strings are falsy). Both
         # 'moda.environment' and 'deployment.environment' are stamped so the
         # backend maps them identically.
-        def _clean_env(value: Optional[str]) -> Optional[str]:
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-            return None
-
-        resolved_environment = (
-            _clean_env(environment)
-            or _clean_env(os.getenv("MODA_ENVIRONMENT"))
-            or _clean_env(resource_attributes.get("moda.environment"))
-            or _clean_env(resource_attributes.get("deployment.environment"))
-            or "production"
-        )
+        if environment is not None:
+            resolved_environment = environment
+        else:
+            resolved_environment = (
+                os.getenv("MODA_ENVIRONMENT")
+                or resource_attributes.get("moda.environment")
+                or resource_attributes.get("deployment.environment")
+                or "production"
+            )
         resource_attributes.update(
             {
                 "moda.environment": resolved_environment,
