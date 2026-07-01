@@ -8,7 +8,7 @@ import hashlib
 import json
 import uuid
 from contextvars import ContextVar
-from typing import Optional
+from typing import Optional, cast
 
 from opentelemetry.context import attach, get_value, set_value
 
@@ -124,7 +124,9 @@ def get_environment() -> Optional[str]:
     Returns:
         The environment name if set for the current context, None otherwise.
     """
-    return get_value(_ENVIRONMENT_CONTEXT_KEY)
+    # OTEL get_value is typed as returning `object`; the value we store here is
+    # always Optional[str].
+    return cast(Optional[str], get_value(_ENVIRONMENT_CONTEXT_KEY))
 
 
 def _set_conversation_id(conversation_id: Optional[str]) -> None:
