@@ -22,6 +22,14 @@ from types import ModuleType
 from typing import Optional
 
 from traceloop.sdk import Instruments, Moda
+from traceloop.sdk.errors import (
+    OnError,
+    ModaConfigError,
+    ModaMissingApiKeyError,
+    ModaExporterError,
+    handle_config_issue,
+    resolve_on_error,
+)
 from traceloop.sdk.context import (
     set_conversation_id,
     set_user_id,
@@ -81,12 +89,23 @@ def _resolve_debug_enabled(explicit_debug: bool | None) -> tuple[bool, str]:
     return False, "default"
 
 
+def _resolve_on_error(explicit: "OnError | str | None") -> OnError:
+    """Resolve the loud-fail mode with explicit-arg > env > default precedence.
+
+    Precedence: explicit ``on_error`` arg > ``MODA_ON_ERROR`` env var >
+    default ``'warn'``. Delegates to the shared resolver in
+    ``traceloop.sdk.errors`` so the moda.init and Moda.init entry points agree.
+    """
+    return resolve_on_error(explicit)
+
+
 def init(
     api_key: str | None = None,
     app_name: str | None = None,
     endpoint: str | None = None,
     exporter=None,
     debug: bool | None = None,
+    on_error: "OnError | str | None" = None,
     **kwargs,
 ):
     """Initialize Moda SDK.
@@ -97,6 +116,10 @@ def init(
         endpoint: Custom ingest endpoint. Defaults to Moda's ingest endpoint.
         exporter: Custom OpenTelemetry exporter (for testing/debugging).
         debug: Enable debug mode. Precedence: explicit argument > MODA_DEBUG env var > False.
+        on_error: Loud-fail mode ('silent' | 'warn' | 'throw'). Resolved via
+            explicit arg > MODA_ON_ERROR env var > default 'warn'. Controls how
+            the SDK reacts to misconfiguration (e.g. a missing API key or an
+            un-attachable tracer provider).
         **kwargs: Additional arguments passed to Moda.init()
     """
     import logging
@@ -120,10 +143,15 @@ def init(
     global _moda_instance
     _moda_instance = Moda()
 
+    # Resolve loud-fail mode here (explicit arg > MODA_ON_ERROR env > 'warn')
+    # and forward the concrete value into Moda.init.
+    resolved_on_error = _resolve_on_error(on_error)
+
     # Only pass api_endpoint if explicitly provided (don't override default with None)
     init_kwargs = {
         "api_key": api_key,
         "exporter": exporter,
+        "on_error": resolved_on_error,
         **kwargs,
     }
     if app_name is not None:
@@ -217,6 +245,12 @@ __all__ = [
     "run_openclaw_cli",
     "Instruments",
     "Moda",
+    # Loud-fail contract (shared with the Node SDK)
+    "OnError",
+    "ModaConfigError",
+    "ModaMissingApiKeyError",
+    "ModaExporterError",
+    "handle_config_issue",
     # Vapi integration
     "process_vapi_end_of_call_report",
     "is_end_of_call_report",
