@@ -1,6 +1,7 @@
 import atexit
 import logging
 import os
+import tempfile
 from urllib.parse import urlparse
 
 
@@ -29,6 +30,7 @@ from opentelemetry.context import get_value, attach, set_value
 from opentelemetry.instrumentation.threading import ThreadingInstrumentor
 
 from opentelemetry.semconv_ai import SpanAttributes
+from traceloop.sdk.conversation import get_conversation_id
 from traceloop.sdk.images.image_uploader import ImageUploader
 from traceloop.sdk.instruments import Instruments
 from traceloop.sdk.tracing.content_allow_list import ContentAllowList
@@ -38,6 +40,28 @@ from typing import Callable, Dict, List, Optional, Set, Union
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GEN_AI_AGENT_NAME,
 )
+
+try:
+    # PY-1 (WS-SDK-PY serial root) loud-fail contract. Imported defensively so
+    # this module keeps working on branches where PY-1 has not landed yet.
+    from traceloop.sdk.errors import handle_config_issue, resolve_on_error
+except Exception:  # pragma: no cover - fallback until PY-1 merges
+    handle_config_issue = None
+    resolve_on_error = None
+
+
+def _report_config_issue(message: str) -> None:
+    """Route a non-fatal config problem through PY-1's loud-fail contract.
+
+    Falls back to a plain warning log when the loud-fail module is not present.
+    Under ``MODA_ON_ERROR=throw`` the real handler re-raises so the onboarding
+    VERIFY stage stays honest; the default ``warn`` mode keeps this non-fatal.
+    """
+    if handle_config_issue is not None:
+        on_error = resolve_on_error() if resolve_on_error is not None else "warn"
+        handle_config_issue(message, on_error=on_error)
+    else:
+        logging.warning(message)
 
 
 TRACER_NAME = "traceloop.tracer"
@@ -68,6 +92,9 @@ class TracerWrapper(object):
     __tracer_provider: TracerProvider = None
     __image_uploader: ImageUploader = None
     __disabled: bool = False
+    __last_conversation_written: bool = False
+    __moda_span_processors: List[SpanProcessor] = []
+    __attached_provider_ids: Set[int] = set()
 
     def __new__(
         cls,
@@ -146,6 +173,17 @@ class TracerWrapper(object):
                 obj.__spans_processor.on_start = obj._span_processor_on_start
                 obj.__tracer_provider.add_span_processor(obj.__spans_processor)
 
+            # Track Moda's own span processor(s) plus the provider(s) we've
+            # attached them to. Lazy re-resolution (``_reresolve_provider``) uses
+            # this to attach to a real TracerProvider that is registered *after*
+            # moda.init() without double-attaching (init-order robustness).
+            if hasattr(obj, "_TracerWrapper__spans_processors"):
+                obj.__moda_span_processors = list(obj.__spans_processors)
+            else:
+                obj.__moda_span_processors = [obj.__spans_processor]
+            obj.__attached_provider_ids = {id(obj.__tracer_provider)}
+            obj.__last_conversation_written = False
+
             if propagator:
                 set_global_textmap(propagator)
 
@@ -217,14 +255,90 @@ class TracerWrapper(object):
         cls.__disabled = disabled
 
     def flush(self):
+        self._reresolve_provider()
+
+        flushed = False
         if hasattr(self, "_TracerWrapper__spans_processor"):
             self.__spans_processor.force_flush()
+            flushed = True
         elif hasattr(self, "_TracerWrapper__spans_processors"):
             for processor in self.__spans_processors:
                 processor.force_flush()
+            flushed = True
+
+        if flushed:
+            self._maybe_write_last_conversation_marker()
 
     def get_tracer(self):
+        self._reresolve_provider()
         return self.__tracer_provider.get_tracer(TRACER_NAME)
+
+    def _reresolve_provider(self) -> None:
+        """Attach Moda's span processor(s) to a real ``TracerProvider`` that was
+        registered *after* ``moda.init()`` (init-order robustness).
+
+        Mirrors the Node SDK's use-time delegate re-resolution
+        (``src/init.ts:100-142``). Idempotent: it skips providers we've already
+        attached to and no-ops while only a ``ProxyTracerProvider`` is present.
+        """
+        if "_TracerWrapper__attached_provider_ids" not in self.__dict__:
+            # Wrapper was constructed without an endpoint (nothing to attach).
+            return
+        attached = self.__attached_provider_ids
+
+        try:
+            current = get_tracer_provider()
+        except Exception:  # pragma: no cover - defensive
+            return
+
+        resolved = _resolve_real_provider(current)
+        if resolved is None or id(resolved) in attached:
+            return
+
+        for processor in self.__moda_span_processors:
+            resolved.add_span_processor(processor)
+        attached.add(id(resolved))
+
+    def _maybe_write_last_conversation_marker(self) -> None:
+        """Write the active conversation id to ``.moda/last-conversation`` on the
+        first flush that has one.
+
+        The CLI VERIFY watcher reads this marker to learn which conversation the
+        app just emitted. Path (``<cwd>/.moda/last-conversation``) and format
+        (the raw conversation id, no trailing newline) match the Node SDK writer
+        so a single CLI watcher reads both. Written atomically (temp + rename),
+        at most once; skipped when no conversation id is set so a later flush can
+        still write it. Write failures route through PY-1's loud-fail contract.
+        """
+        if self.__last_conversation_written:
+            return
+
+        conversation_id = get_conversation_id()
+        if not conversation_id:
+            # Nothing to hand off yet; a later flush may still write it.
+            return
+
+        try:
+            moda_dir = os.path.join(os.getcwd(), ".moda")
+            os.makedirs(moda_dir, exist_ok=True)
+            target_path = os.path.join(moda_dir, "last-conversation")
+
+            fd, tmp_path = tempfile.mkstemp(
+                dir=moda_dir, prefix=".last-conversation-", suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(conversation_id)
+                os.replace(tmp_path, target_path)
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+
+            self.__last_conversation_written = True
+        except Exception as exc:  # noqa: BLE001 - routed through loud-fail contract
+            _report_config_issue(
+                f"Moda: failed to write .moda/last-conversation marker: {exc}"
+            )
 
 
 def set_association_properties(properties: dict) -> None:
@@ -432,25 +546,57 @@ def get_default_span_processor(
     return processor
 
 
+def _resolve_real_provider(provider) -> Optional[TracerProvider]:
+    """Return a real (SDK-managed) ``TracerProvider``, or ``None`` if only a
+    proxy is present.
+
+    Mirrors the Node lazy delegate unwrap (``src/init.ts``): a
+    ``ProxyTracerProvider`` is a placeholder for a not-yet-registered real
+    provider. In the Python API a proxy has no ``_delegate`` — it forwards to the
+    module-global ``_TRACER_PROVIDER`` — so a proxy here simply means "no real
+    provider yet". A provider that cannot host span processors is also treated as
+    unusable.
+    """
+    if provider is None or isinstance(provider, ProxyTracerProvider):
+        return None
+    if not hasattr(provider, "add_span_processor"):
+        return None
+    return provider
+
+
 def init_tracer_provider(
     resource: Resource, sampler: Optional[Sampler] = None
 ) -> TracerProvider:
-    provider: TracerProvider = None
+    """Resolve the ``TracerProvider`` Moda should attach its span processor to.
+
+    - A real provider already registered at init → attach to it (coexistence).
+    - A provider that cannot host span processors → log and bail (unchanged).
+    - Only a ``ProxyTracerProvider`` present → create and register Moda's own
+      provider as a fallback so its spans are still captured. Order-robustness
+      for a real provider that appears *after* ``moda.init()`` is handled lazily
+      by ``TracerWrapper._reresolve_provider`` at use time, mirroring the Node
+      SDK's use-time delegate re-resolution.
+    """
     default_provider: TracerProvider = get_tracer_provider()
 
-    if isinstance(default_provider, ProxyTracerProvider):
-        if sampler is not None:
-            provider = TracerProvider(resource=resource, sampler=sampler)
-        else:
-            provider = TracerProvider(resource=resource)
-        trace.set_tracer_provider(provider)
-    elif not hasattr(default_provider, "add_span_processor"):
+    resolved = _resolve_real_provider(default_provider)
+    if resolved is not None:
+        return resolved
+
+    if not isinstance(default_provider, ProxyTracerProvider) and not hasattr(
+        default_provider, "add_span_processor"
+    ):
         logging.error(
             "Cannot add span processor to the default provider since it doesn't support it"
         )
         return
+
+    # Only a proxy is present: create + register our own provider as a fallback.
+    if sampler is not None:
+        provider = TracerProvider(resource=resource, sampler=sampler)
     else:
-        provider = default_provider
+        provider = TracerProvider(resource=resource)
+    trace.set_tracer_provider(provider)
 
     return provider
 
