@@ -1,5 +1,6 @@
 """Wrapped async generator for Claude Agent SDK receive_response() streams."""
 
+import json
 import logging
 
 from opentelemetry.trace import Span
@@ -10,11 +11,21 @@ logger = logging.getLogger(__name__)
 
 def _set_span_attribute(span: Span, name: str, value):
     """Set a span attribute only if value is not None."""
-    if value is not None and value != "":
-        try:
-            span.set_attribute(name, value)
-        except Exception:
-            pass
+    if value is None or value == "":
+        return
+
+    primitive_types = (bool, str, bytes, int, float)
+    if isinstance(value, (list, tuple)):
+        if not all(isinstance(item, primitive_types) for item in value):
+            return
+        value = list(value)
+    elif not isinstance(value, primitive_types):
+        return
+
+    try:
+        span.set_attribute(name, value)
+    except Exception:
+        pass
 
 
 def _get(obj, key, default=None):
@@ -22,6 +33,20 @@ def _get(obj, key, default=None):
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _safe_string(value) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _safe_json_value(value):
+    if value in (None, ""):
+        return {}
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        return {}
 
 
 class WrappedAgentStream:
@@ -54,6 +79,11 @@ class WrappedAgentStream:
         self._stream_text_buffer = []
         self._turn_counter = 0
         self._current_turn_id = None
+
+        # Detailed tool call and thinking tracking
+        self._tool_calls: list[dict] = []  # [{name, id, input}, ...]
+        self._thinking_blocks: list[str] = []
+        self._has_thinking = False
 
     def __aiter__(self):
         return self
@@ -173,16 +203,28 @@ class WrappedAgentStream:
             text_chunks = []
             for block in content:
                 block_type = type(block).__name__
-                if block_type == "ToolUseBlock":
+                attr_type = getattr(block, "type", None)
+
+                if block_type == "ToolUseBlock" or attr_type == "tool_use":
                     self._tool_call_count += 1
-                elif hasattr(block, "type"):
-                    attr_type = getattr(block, "type", None)
-                    if attr_type == "tool_use":
-                        self._tool_call_count += 1
-                    elif attr_type == "text":
-                        block_text = getattr(block, "text", None)
-                        if isinstance(block_text, str) and block_text:
-                            text_chunks.append(block_text)
+                    # Capture tool call details
+                    tool_name = _safe_string(getattr(block, "name", ""))
+                    tool_id = _safe_string(getattr(block, "id", ""))
+                    tool_input = _safe_json_value(getattr(block, "input", {}))
+                    self._tool_calls.append({
+                        "name": tool_name,
+                        "id": tool_id,
+                        "input": tool_input,
+                    })
+                elif block_type == "ThinkingBlock" or attr_type == "thinking":
+                    self._has_thinking = True
+                    thinking_text = _safe_string(getattr(block, "thinking", ""))
+                    if thinking_text:
+                        self._thinking_blocks.append(thinking_text)
+                elif attr_type == "text":
+                    block_text = getattr(block, "text", None)
+                    if isinstance(block_text, str) and block_text:
+                        text_chunks.append(block_text)
 
             if text_chunks:
                 self._add_completion_candidate("".join(text_chunks), source="assistant")
@@ -267,6 +309,41 @@ class WrappedAgentStream:
                         f"llm.completions.{index}.content",
                         completion_text[:8000],
                     )
+
+            # Per-tool-call span attributes
+            if self._tool_calls:
+                _set_span_attribute(self._span, "moda.has_tool_use", True)
+                _set_span_attribute(
+                    self._span, "gen_ai.response.tool_calls_count", len(self._tool_calls)
+                )
+                for i, tc in enumerate(self._tool_calls):
+                    if tc.get("name"):
+                        _set_span_attribute(
+                            self._span, f"gen_ai.tool_calls.{i}.function.name", tc["name"]
+                        )
+                    if tc.get("id"):
+                        _set_span_attribute(self._span, f"gen_ai.tool_calls.{i}.id", tc["id"])
+                    tool_input = tc.get("input")
+                    if tool_input not in (None, "", {}):
+                        try:
+                            serialized_input = (
+                                tool_input
+                                if isinstance(tool_input, str)
+                                else json.dumps(tool_input)
+                            )
+                        except (TypeError, ValueError):
+                            serialized_input = None
+
+                        if serialized_input:
+                            _set_span_attribute(
+                                self._span,
+                                f"gen_ai.tool_calls.{i}.function.arguments",
+                                serialized_input,
+                            )
+
+            # Thinking block attributes
+            if self._has_thinking:
+                _set_span_attribute(self._span, "moda.has_thinking", True)
 
             # Agent-specific attributes
             _set_span_attribute(self._span, "claude_agent.num_turns", self._num_turns)

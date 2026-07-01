@@ -8,13 +8,24 @@ import hashlib
 import json
 import uuid
 from contextvars import ContextVar
-from typing import Optional
+from typing import Optional, cast
+
+from opentelemetry.context import attach, get_value, set_value
 
 # Context variables for conversation and user tracking
 _conversation_id_var: ContextVar[Optional[str]] = ContextVar(
     "conversation_id", default=None
 )
 _user_id_var: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
+
+# The environment override is stored in the OpenTelemetry context (rather than a
+# bare ContextVar) so it propagates to worker threads via the SDK's
+# ThreadingInstrumentor. This matters because the override is stamped in the
+# shared span on-start hook, which also runs for spans created in worker threads
+# whose OTEL parent context is propagated. The other attributes stamped there
+# (workflow name, entity path, association properties) read from the OTEL
+# context for the same reason.
+_ENVIRONMENT_CONTEXT_KEY = "moda_environment"
 
 
 def compute_conversation_id(messages: list[dict]) -> str:
@@ -107,6 +118,17 @@ def get_user_id() -> Optional[str]:
     return _user_id_var.get()
 
 
+def get_environment() -> Optional[str]:
+    """Get the current environment override from context.
+
+    Returns:
+        The environment name if set for the current context, None otherwise.
+    """
+    # OTEL get_value is typed as returning `object`; the value we store here is
+    # always Optional[str].
+    return cast(Optional[str], get_value(_ENVIRONMENT_CONTEXT_KEY))
+
+
 def _set_conversation_id(conversation_id: Optional[str]) -> None:
     """Internal function to set conversation ID in context."""
     _conversation_id_var.set(conversation_id)
@@ -115,3 +137,13 @@ def _set_conversation_id(conversation_id: Optional[str]) -> None:
 def _set_user_id(user_id: Optional[str]) -> None:
     """Internal function to set user ID in context."""
     _user_id_var.set(user_id)
+
+
+def _set_environment(environment: Optional[str]) -> None:
+    """Internal function to set the environment override in the OTEL context.
+
+    Attaches without detaching, so the value persists for the current context
+    (used by set_environment_value). The scoped context manager uses attach +
+    detach for balanced restore.
+    """
+    attach(set_value(_ENVIRONMENT_CONTEXT_KEY, environment))

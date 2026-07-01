@@ -302,6 +302,20 @@ def _get_vendor_from_url(base_url):
         return "Google"
     elif "openrouter.ai" in base_url:
         return "OpenRouter"
+    elif "groq.com" in base_url:
+        return "Groq"
+    elif "together.xyz" in base_url or "together.ai" in base_url:
+        return "Together"
+    elif "mistral.ai" in base_url:
+        return "Mistral"
+    elif "cohere.com" in base_url or "cohere.ai" in base_url:
+        return "Cohere"
+    elif "deepseek.com" in base_url:
+        return "DeepSeek"
+    elif "fireworks.ai" in base_url:
+        return "Fireworks"
+    elif "litellm" in base_url:
+        return "LiteLLM"
 
     return "openai"
 
@@ -335,6 +349,90 @@ def _extract_model_name_from_provider_format(model_name):
         return parts[-1]  # Return the last part (actual model name)
 
     return model_name
+
+
+def _extract_litellm_headers(response):
+    """
+    Extract LiteLLM metadata from response headers.
+    Returns dict with LiteLLM metadata if detected, None otherwise.
+    """
+    headers = None
+
+    # Try to access headers from OpenAI SDK response object
+    if hasattr(response, '_response') and hasattr(response._response, 'headers'):
+        headers = response._response.headers
+    elif hasattr(response, 'response') and hasattr(response.response, 'headers'):
+        headers = response.response.headers
+    elif hasattr(response, '_headers'):
+        headers = response._headers
+
+    if not headers:
+        return None
+
+    # Helper to safely get header
+    def get_header(name):
+        if hasattr(headers, 'get'):
+            return headers.get(name)
+        return None
+
+    call_id = get_header('x-litellm-call-id')
+    model_id = get_header('x-litellm-model-id')
+    model_group = get_header('x-litellm-model-group')
+    model_api_base = get_header('x-litellm-model-api-base')
+    litellm_version = get_header('x-litellm-version')
+    response_cost = get_header('x-litellm-response-cost')
+    key_spend = get_header('x-litellm-key-spend')
+    response_duration_ms = get_header('x-litellm-response-duration-ms')
+    overhead_duration_ms = get_header('x-litellm-overhead-duration-ms')
+    attempted_retries = get_header('x-litellm-attempted-retries')
+    attempted_fallbacks = get_header('x-litellm-attempted-fallbacks')
+
+    if not any([call_id, model_id, model_group, litellm_version]):
+        return None
+
+    return {
+        'is_proxy': True,
+        'call_id': call_id or None,
+        'model_id': model_id or None,
+        'model_group': model_group or None,
+        'model_api_base': model_api_base or None,
+        'version': litellm_version or None,
+        'response_cost': float(response_cost) if response_cost else None,
+        'key_spend': float(key_spend) if key_spend else None,
+        'response_duration_ms': float(response_duration_ms) if response_duration_ms else None,
+        'overhead_duration_ms': float(overhead_duration_ms) if overhead_duration_ms else None,
+        'attempted_retries': int(attempted_retries) if attempted_retries else None,
+        'attempted_fallbacks': int(attempted_fallbacks) if attempted_fallbacks else None,
+    }
+
+
+def _set_litellm_span_attributes(span, metadata):
+    """Set LiteLLM-specific span attributes on the span."""
+    _set_span_attribute(span, "litellm.is_proxy", True)
+
+    if metadata.get('call_id'):
+        _set_span_attribute(span, "litellm.call_id", metadata['call_id'])
+    if metadata.get('model_id'):
+        _set_span_attribute(span, "litellm.model_id", metadata['model_id'])
+    if metadata.get('model_group'):
+        _set_span_attribute(span, "litellm.model_group", metadata['model_group'])
+        _set_span_attribute(span, "llm.system", metadata['model_group'])
+    if metadata.get('model_api_base'):
+        _set_span_attribute(span, "litellm.model_api_base", metadata['model_api_base'])
+    if metadata.get('version'):
+        _set_span_attribute(span, "litellm.version", metadata['version'])
+    if metadata.get('response_cost') is not None:
+        _set_span_attribute(span, "litellm.response_cost", metadata['response_cost'])
+    if metadata.get('key_spend') is not None:
+        _set_span_attribute(span, "litellm.key_spend", metadata['key_spend'])
+    if metadata.get('response_duration_ms') is not None:
+        _set_span_attribute(span, "litellm.response_duration_ms", metadata['response_duration_ms'])
+    if metadata.get('overhead_duration_ms') is not None:
+        _set_span_attribute(span, "litellm.overhead_duration_ms", metadata['overhead_duration_ms'])
+    if metadata.get('attempted_retries') is not None:
+        _set_span_attribute(span, "litellm.attempted_retries", metadata['attempted_retries'])
+    if metadata.get('attempted_fallbacks') is not None:
+        _set_span_attribute(span, "litellm.attempted_fallbacks", metadata['attempted_fallbacks'])
 
 
 def is_streaming_response(response):

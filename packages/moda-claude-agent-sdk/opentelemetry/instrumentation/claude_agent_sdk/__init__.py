@@ -7,6 +7,7 @@ the SDK's own methods to extract conversation data from the messages it yields.
 """
 
 import logging
+from contextvars import ContextVar
 from typing import Collection
 
 from opentelemetry.instrumentation.claude_agent_sdk.streaming import (
@@ -22,6 +23,9 @@ from wrapt import wrap_function_wrapper
 logger = logging.getLogger(__name__)
 
 _instruments = ("claude-agent-sdk",)
+
+# Async-safe storage for the prompt between query() and receive_response()
+_current_prompt: ContextVar[str] = ContextVar("_moda_current_prompt", default="")
 
 WRAPPED_METHODS = [
     {
@@ -84,7 +88,7 @@ def _wrap_query(tracer):
     async def wrapper(wrapped, instance, args, kwargs):
         # Store the prompt on the instance so receive_response wrapper can access it
         prompt = args[0] if args else kwargs.get("prompt", "")
-        instance._moda_last_prompt = prompt
+        _current_prompt.set(str(prompt))
         return await wrapped(*args, **kwargs)
 
     return wrapper
@@ -132,7 +136,7 @@ def _wrap_receive_response(tracer):
             _set_span_attribute(span, "moda.user_id", user_id)
 
         # Capture the prompt if stored by query() wrapper
-        prompt = getattr(instance, "_moda_last_prompt", None)
+        prompt = _current_prompt.get("")
         if prompt:
             prompt_text = str(prompt)
             _set_span_attribute(span, "gen_ai.prompt", prompt_text[:1000])
