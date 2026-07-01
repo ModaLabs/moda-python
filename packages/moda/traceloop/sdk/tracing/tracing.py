@@ -32,6 +32,9 @@ from opentelemetry.semconv_ai import SpanAttributes
 from traceloop.sdk.images.image_uploader import ImageUploader
 from traceloop.sdk.instruments import Instruments
 from traceloop.sdk.tracing.content_allow_list import ContentAllowList
+from traceloop.sdk.tracing.last_conversation import (
+    LastConversationWriterSpanProcessor,
+)
 from traceloop.sdk.utils import is_notebook
 from traceloop.sdk.utils.package_check import is_package_installed
 from typing import Callable, Dict, List, Optional, Set, Union
@@ -145,6 +148,15 @@ class TracerWrapper(object):
 
                 obj.__spans_processor.on_start = obj._span_processor_on_start
                 obj.__tracer_provider.add_span_processor(obj.__spans_processor)
+
+            # First-trace attribution channel (MODA-585): write the freshly-
+            # minted conversation_id to <cwd>/.moda/last-conversation on the
+            # first exported span. Registered as its own processor so it fires
+            # regardless of which processor branch above was taken.
+            obj.__last_conversation_processor = LastConversationWriterSpanProcessor()
+            obj.__tracer_provider.add_span_processor(
+                obj.__last_conversation_processor
+            )
 
             if propagator:
                 set_global_textmap(propagator)
