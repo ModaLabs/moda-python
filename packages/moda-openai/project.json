@@ -2,13 +2,13 @@
   "name": "opentelemetry-instrumentation-openai",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
-  "sourceRoot": "packages/opentelemetry-instrumentation-openai/opentelemetry/instrumentation/openai",
+  "sourceRoot": "packages/moda-openai/opentelemetry/instrumentation/openai",
   "targets": {
     "lock": {
       "executor": "nx:run-commands",
       "options": {
         "command": "uv lock",
-        "cwd": "packages/opentelemetry-instrumentation-openai"
+        "cwd": "packages/moda-openai"
       }
     },
     "add": {
@@ -29,7 +29,7 @@
         "{projectRoot}/dist"
       ],
       "options": {
-        "outputPath": "packages/opentelemetry-instrumentation-openai/dist",
+        "outputPath": "packages/moda-openai/dist",
         "publish": false,
         "lockedVersions": true,
         "bundleLocalDependencies": true
@@ -39,25 +39,25 @@
       "executor": "nx:run-commands",
       "options": {
         "command": "uv sync --all-groups",
-        "cwd": "packages/opentelemetry-instrumentation-openai"
+        "cwd": "packages/moda-openai"
       }
     },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
         "command": "uv run ruff check .",
-        "cwd": "packages/opentelemetry-instrumentation-openai"
+        "cwd": "packages/moda-openai"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "outputs": [
-        "{workspaceRoot}/reports/packages/opentelemetry-instrumentation-openai/unittests",
-        "{workspaceRoot}/coverage/packages/opentelemetry-instrumentation-openai"
+        "{workspaceRoot}/reports/packages/moda-openai/unittests",
+        "{workspaceRoot}/coverage/packages/moda-openai"
       ],
       "options": {
         "command": "uv run pytest tests/",
-        "cwd": "packages/opentelemetry-instrumentation-openai"
+        "cwd": "packages/moda-openai"
       }
     },
     "build-release": {
@@ -67,7 +67,7 @@
           "chmod +x ../../scripts/build-release.sh",
           "../../scripts/build-release.sh"
         ],
-        "cwd": "packages/opentelemetry-instrumentation-openai"
+        "cwd": "packages/moda-openai"
       }
     }
   },
