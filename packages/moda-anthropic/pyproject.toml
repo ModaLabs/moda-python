@@ -3,7 +3,7 @@ name = "moda-anthropic"
 version = "0.1.0"
 description = "Moda Anthropic instrumentation for LLM observability"
 authors = [
-  { name = "Moda Labs", email = "support@moda.so" },
+  { name = "Moda Labs", email = "founders@modaflows.com" },
 ]
 license = "Apache-2.0"
 readme = "README.md"
@@ -16,6 +16,8 @@ dependencies = [
 ]
 
 [project.urls]
+Documentation = "https://docs.moda.dev"
+Homepage = "https://moda.dev"
 Repository = "https://github.com/ModaLabs/moda-python/tree/main/packages/moda-anthropic"
 
 [project.optional-dependencies]
