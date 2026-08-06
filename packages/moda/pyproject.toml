@@ -1,6 +1,6 @@
 [project]
 name = "moda-ai"
-version = "1.4.1"
+version = "1.4.2"
 description = "Moda SDK - LLM Observability with Automatic Conversation Threading"
 authors = [
   { name = "Moda Labs", email = "founders@modaflows.com" },

@@ -1,6 +1,6 @@
 [project]
 name = "moda-openai"
-version = "0.1.0"
+version = "0.1.1"
 description = "Moda OpenAI instrumentation for LLM observability"
 authors = [
   { name = "Moda Labs", email = "founders@modaflows.com" },
