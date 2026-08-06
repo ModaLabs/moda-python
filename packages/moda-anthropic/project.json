@@ -1,14 +1,14 @@
 {
-  "name": "opentelemetry-instrumentation-anthropic",
+  "name": "moda-anthropic",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
-  "sourceRoot": "packages/opentelemetry-instrumentation-anthropic/opentelemetry_instrumentation_anthropic",
+  "sourceRoot": "packages/moda-anthropic/opentelemetry/instrumentation/anthropic",
   "targets": {
     "lock": {
       "executor": "nx:run-commands",
       "options": {
         "command": "uv lock",
-        "cwd": "packages/opentelemetry-instrumentation-anthropic"
+        "cwd": "packages/moda-anthropic"
       }
     },
     "add": {
@@ -29,7 +29,7 @@
         "{projectRoot}/dist"
       ],
       "options": {
-        "outputPath": "packages/opentelemetry-instrumentation-anthropic/dist",
+        "outputPath": "packages/moda-anthropic/dist",
         "publish": false,
         "lockedVersions": true,
         "bundleLocalDependencies": true
@@ -39,25 +39,25 @@
       "executor": "nx:run-commands",
       "options": {
         "command": "uv sync --all-groups",
-        "cwd": "packages/opentelemetry-instrumentation-anthropic"
+        "cwd": "packages/moda-anthropic"
       }
     },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
         "command": "uv run ruff check .",
-        "cwd": "packages/opentelemetry-instrumentation-anthropic"
+        "cwd": "packages/moda-anthropic"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "outputs": [
-        "{workspaceRoot}/reports/packages/opentelemetry-instrumentation-anthropic/unittests",
-        "{workspaceRoot}/coverage/packages/opentelemetry-instrumentation-anthropic"
+        "{workspaceRoot}/reports/packages/moda-anthropic/unittests",
+        "{workspaceRoot}/coverage/packages/moda-anthropic"
       ],
       "options": {
         "command": "uv run pytest tests/",
-        "cwd": "packages/opentelemetry-instrumentation-anthropic"
+        "cwd": "packages/moda-anthropic"
       }
     },
     "build-release": {
@@ -67,7 +67,7 @@
           "chmod +x ../../scripts/build-release.sh",
           "../../scripts/build-release.sh"
         ],
-        "cwd": "packages/opentelemetry-instrumentation-anthropic"
+        "cwd": "packages/moda-anthropic"
       }
     }
   },

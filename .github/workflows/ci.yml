@@ -10,8 +10,6 @@ on:
 
 env:
   PIP_NO_CACHE_DIR: 1
-  NX_NATIVE_COMMAND_RUNNER: "false"
-  NX_DAEMON: "false"
 
 jobs:
   lint-pr:

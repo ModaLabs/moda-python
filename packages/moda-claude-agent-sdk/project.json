@@ -1,5 +1,5 @@
 {
-  "name": "opentelemetry-instrumentation-claude-agent-sdk",
+  "name": "moda-claude-agent-sdk",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "sourceRoot": "packages/moda-claude-agent-sdk/opentelemetry",
