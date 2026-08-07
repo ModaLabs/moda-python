@@ -27,8 +27,13 @@ moda.conversation_id = "session_" + session_id
 client = OpenAI()
 response = client.chat.completions.create(
     model="gpt-4",
-    messages=[{"role": "user", "content": "Hello!"}]
+    messages=[{"role": "user", "content": "Hello!"}],
+    # For streaming: include usage by adding stream_options
+    # stream_options={"include_usage": True}
 )
+
+# Note: Token usage tracking is mandatory. The SDK will throw an error
+# if the LLM provider doesn't return token usage information.
 
 # Ensure all traces are sent
 moda.flush()
@@ -73,6 +78,28 @@ If you don't set a conversation ID, the SDK automatically computes a stable one 
 - The system prompt (if present)
 
 This works for simple use cases but explicit IDs are recommended for production.
+
+### Token Usage Tracking (Mandatory)
+
+Token usage tracking is now mandatory for all LLM calls. The SDK will throw an error if token data is not available.
+
+**For OpenAI:**
+- Regular responses automatically include token usage
+- For streaming, you must set `stream_options={"include_usage": True}`
+
+```python
+# Streaming with token usage
+response = client.chat.completions.create(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "Hello!"}],
+    stream=True,
+    stream_options={"include_usage": True}  # Required for streaming
+)
+```
+
+**For Anthropic:**
+- Token usage is provided by default in API responses
+- If not available, the SDK will automatically count tokens using Anthropic's tokenizer
 
 ## Supported Providers
 

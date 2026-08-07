@@ -392,9 +392,14 @@ def _set_chat_metrics(
         is_streaming=is_streaming,
     )
 
-    # token metrics
+    # token metrics (now mandatory)
     usage = response_dict.get("usage")  # type: dict
-    if usage and token_counter:
+    if not usage:
+        raise ValueError(
+            "Token usage is required but not provided by OpenAI. "
+            "For streaming requests, ensure stream_options.include_usage is set to true."
+        )
+    if token_counter:
         _set_token_counter_metrics(token_counter, usage, shared_attributes)
 
     # choices metrics
@@ -419,6 +424,13 @@ def _set_choice_counter_metrics(choice_counter, choices, shared_attributes):
 
 
 def _set_token_counter_metrics(token_counter, usage, shared_attributes):
+    # Validate required token fields are present
+    if "prompt_tokens" not in usage or usage["prompt_tokens"] is None:
+        raise ValueError("prompt_tokens is required in usage data but was not provided")
+
+    if "completion_tokens" not in usage or usage["completion_tokens"] is None:
+        raise ValueError("completion_tokens is required in usage data but was not provided")
+
     for name, val in usage.items():
         if name in OPENAI_LLM_USAGE_TOKEN_TYPES:
             attributes_with_token_type = {
@@ -580,16 +592,23 @@ def _set_completions(span, choices):
 def _set_streaming_token_metrics(
     request_kwargs, complete_response, span, token_counter, shared_attributes
 ):
-    prompt_usage = -1
-    completion_usage = -1
+    # Token usage is now mandatory for streaming responses
+    if not complete_response.get("usage"):
+        raise ValueError(
+            "Token usage is required but not provided in streaming response. "
+            "For OpenAI, ensure stream_options.include_usage is set to true. "
+            "Some providers include usage in the last chunk or in choices[0]."
+        )
 
-    # Use token usage from API response only
-    if complete_response.get("usage"):
-        usage = complete_response["usage"]
-        if usage.get("prompt_tokens"):
-            prompt_usage = usage["prompt_tokens"]
-        if usage.get("completion_tokens"):
-            completion_usage = usage["completion_tokens"]
+    usage = complete_response["usage"]
+    prompt_usage = usage.get("prompt_tokens", -1)
+    completion_usage = usage.get("completion_tokens", -1)
+
+    # Validate required tokens are present
+    if prompt_usage < 0:
+        raise ValueError("prompt_tokens is required in streaming usage data but was not provided")
+    if completion_usage < 0:
+        raise ValueError("completion_tokens is required in streaming usage data but was not provided")
 
     # span record
     _set_span_stream_usage(span, prompt_usage, completion_usage)
