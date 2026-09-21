@@ -44,6 +44,8 @@ def _service_url(endpoint: str) -> str:
         or url.fragment
     ):
         raise ValueError("Artifact endpoint must be an HTTP(S) URL without credentials or query")
+    if url.scheme == "http" and url.hostname not in ("localhost", "127.0.0.1", "::1"):
+        raise ValueError("Artifact endpoints require HTTPS except on loopback")
     path = url.path.rstrip("/")
     if path.endswith(("/v1/traces", "/v1/artifacts")):
         path = path.rsplit("/v1/", 1)[0]

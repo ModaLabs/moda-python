@@ -231,3 +231,18 @@ def test_explicit_span_does_not_inherit_a_different_active_trace():
             span_id="other-span",
         )
     assert "traceId" not in json.loads(calls[0].content)
+
+
+@pytest.mark.parametrize(
+    "endpoint", ["http://ingest.example", "http://localhost.example", "http://192.168.1.5", "http://0.0.0.0"]
+)
+def test_requires_https_outside_loopback(endpoint):
+    with pytest.raises(ValueError, match="HTTPS"):
+        ArtifactClient("key", endpoint)
+
+
+@pytest.mark.parametrize(
+    "endpoint", ["http://localhost:8787", "http://127.0.0.1:8787", "http://[::1]:8787", "https://ingest.example"]
+)
+def test_permits_loopback_for_isolated_local_validation(endpoint):
+    ArtifactClient("key", endpoint)
