@@ -45,6 +45,17 @@ from moda.vapi import (
     is_end_of_call_report,
 )
 
+from moda.artifacts import (
+    ArtifactClient,
+    ArtifactError,
+    ArtifactInteractionError,
+    configure_artifacts,
+    upload_artifact,
+    upload_artifact_async,
+    record_artifact_interaction,
+    record_artifact_interaction_async,
+)
+
 # Module-level instance for convenience
 _moda_instance: Moda | None = None
 
@@ -97,6 +108,7 @@ def init(
         init_kwargs["api_endpoint"] = endpoint
 
     _moda_instance.init(**init_kwargs)
+    configure_artifacts(api_key, endpoint or kwargs.get("api_endpoint"))
 
     if debug:
         print("[Moda Debug] Initialization complete")
@@ -165,6 +177,13 @@ sys.modules[__name__] = _wrapped_module
 
 
 __all__ = [
+    "ArtifactClient",
+    "ArtifactError",
+    "ArtifactInteractionError",
+    "upload_artifact",
+    "upload_artifact_async",
+    "record_artifact_interaction",
+    "record_artifact_interaction_async",
     "init",
     "flush",
     "conversation_id",
