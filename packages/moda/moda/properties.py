@@ -27,6 +27,7 @@ import threading
 import time
 import uuid
 from datetime import date, datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Iterable, Mapping, Optional, Union
 from urllib.parse import urlparse
 
@@ -223,10 +224,6 @@ class _FlushRequest:
         self.done = threading.Event()
 
 
-class _Stop:
-    pass
-
-
 class PropertiesClient:
     """Background batching sender for identify/group/subscription payloads."""
 
@@ -252,32 +249,32 @@ class PropertiesClient:
         self._backoff_base = backoff_base
         self._sleep = sleep
         self._queue: "queue.Queue[Any]" = queue.Queue(maxsize=max_queue_size)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None
         self._http: Optional[httpx.Client] = None
         self._closed = False
         self._dropped = 0
-        self._pending_flushes: list = []
 
     # ---------------------------------------------------------------- public
 
     def enqueue(self, path: str, item: dict) -> bool:
-        if self._closed:
-            logger.debug("Moda properties client is shut down; dropping %s item", path)
-            return False
-        try:
-            self._queue.put_nowait((path, item))
-        except queue.Full:
-            self._dropped += 1
-            logger.warning(
-                "Moda properties queue is full (%d items); dropping %s item (dropped so far: %d)",
-                self._queue.maxsize,
-                path,
-                self._dropped,
-            )
-            return False
-        self._ensure_thread()
-        return True
+        with self._lock:
+            if self._closed:
+                logger.debug("Moda properties client is shut down; dropping %s item", path)
+                return False
+            try:
+                self._queue.put_nowait((path, item))
+            except queue.Full:
+                self._dropped += 1
+                logger.warning(
+                    "Moda properties queue is full (%d items); dropping %s item (dropped so far: %d)",
+                    self._queue.maxsize,
+                    path,
+                    self._dropped,
+                )
+                return False
+            self._ensure_thread()
+            return True
 
     def flush(self, timeout: Optional[float] = DEFAULT_FLUSH_TIMEOUT_SECONDS) -> bool:
         """Block until everything enqueued before this call has been sent (or dropped)."""
@@ -296,22 +293,12 @@ class PropertiesClient:
         return True
 
     def shutdown(self, timeout: Optional[float] = DEFAULT_FLUSH_TIMEOUT_SECONDS) -> None:
-        if self._closed:
-            return
-        self.flush(timeout)
-        self._closed = True
-        thread = self._thread
+        with self._lock:
+            self._closed = True
+            thread = self._thread
+        # The worker owns closure so a timed-out join leaves retries usable.
         if thread is not None and thread.is_alive():
-            try:
-                self._queue.put(_Stop(), timeout=1.0)
-            except queue.Full:
-                pass
-            thread.join(timeout=1.0)
-        if self._http is not None:
-            try:
-                self._http.close()
-            except Exception:  # pragma: no cover - defensive
-                pass
+            thread.join(timeout=timeout)
 
     # -------------------------------------------------------------- internal
 
@@ -330,21 +317,27 @@ class PropertiesClient:
         return self._http
 
     def _run(self) -> None:
+        try:
+            self._run_loop()
+        finally:
+            if self._http is not None:
+                self._http.close()
+
+    def _run_loop(self) -> None:
         buffers: dict[str, list] = {}
         last_flush = time.monotonic()
         while True:
             try:
-                remaining = max(0.0, self._flush_interval - (time.monotonic() - last_flush))
+                remaining = min(0.1, max(0.0, self._flush_interval - (time.monotonic() - last_flush)))
                 try:
                     entry = self._queue.get(timeout=remaining)
                 except queue.Empty:
                     entry = None
 
-                if isinstance(entry, _Stop):
+                if entry is None and self._closed:
                     self._send_all(buffers)
                     return
                 if isinstance(entry, _FlushRequest):
-                    self._drain_nowait(buffers)
                     self._send_all(buffers)
                     last_flush = time.monotonic()
                     entry.done.set()
@@ -363,32 +356,11 @@ class PropertiesClient:
             except Exception:  # never let the worker die
                 logger.exception("Moda properties worker error")
 
-    def _drain_nowait(self, buffers: dict) -> None:
-        """Pull items already queued (ahead of a flush request) into buffers."""
-        while True:
-            try:
-                entry = self._queue.get_nowait()
-            except queue.Empty:
-                return
-            if isinstance(entry, _FlushRequest):
-                # Will be satisfied by the send that follows.
-                self._pending_flushes.append(entry)
-                continue
-            if isinstance(entry, _Stop):
-                # Re-queue so the loop exits after this flush.
-                self._queue.put_nowait(entry)
-                return
-            path, item = entry
-            buffers.setdefault(path, []).append(item)
-
     def _send_all(self, buffers: dict) -> None:
         for path in list(buffers):
             items = buffers.pop(path)
             for i in range(0, len(items), self._max_batch_size):
                 self._send(path, items[i : i + self._max_batch_size])
-        pending = self._pending_flushes
-        while pending:
-            pending.pop().done.set()
 
     def _send(self, path: str, items: list) -> None:
         if not items:
@@ -434,7 +406,7 @@ class PropertiesClient:
             delay = min(BACKOFF_MAX_SECONDS, self._backoff_base * (2 ** (attempt - 1)))
             delay = delay * (0.5 + random.random() / 2)
             if retry_after is not None:
-                delay = min(BACKOFF_MAX_SECONDS, max(delay, retry_after))
+                delay = max(delay, retry_after)
             logger.debug("Moda properties: retrying %s in %.2fs (%s)", path, delay, reason)
             self._sleep(delay)
 
@@ -462,9 +434,16 @@ def _parse_retry_after(response: httpx.Response) -> Optional[float]:
     if not value:
         return None
     try:
-        return max(0.0, float(value))
+        delay = float(value)
     except ValueError:
-        return None
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return max(0.0, delay) if math.isfinite(delay) else None
 
 
 # ============================================================

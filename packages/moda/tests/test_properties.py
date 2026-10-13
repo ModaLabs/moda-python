@@ -380,3 +380,102 @@ def test_valid_key_shapes_and_datetime_values(configured):
     moda.flush()
     [item] = configured.bodies()[0]["batch"]
     assert item["traits"]["signup_at"] == "2026-01-02T00:00:00.000Z"
+
+
+@pytest.mark.parametrize('kwargs, expected', [
+    ({'api_endpoint': 'https://alias.example/v1/traces'}, 'https://alias.example/v1/traces'),
+    ({'endpoint': 'https://explicit.example/v1/traces',
+      'api_endpoint': 'https://alias.example/v1/traces'}, 'https://explicit.example/v1/traces'),
+])
+def test_init_routes_properties_to_effective_endpoint(monkeypatch, kwargs, expected):
+    calls = {}
+    monkeypatch.setattr(moda.Moda, 'init', lambda self, **kw: calls.update(kw))
+    monkeypatch.setattr(properties, 'configure', lambda **kw: calls.setdefault('properties', kw))
+    moda.init(api_key='k', **kwargs)
+    assert calls['api_endpoint'] == expected
+    assert calls['properties']['endpoint'] == expected
+
+
+def test_shutdown_timeout_preserves_retry_and_closes_after_worker_exit():
+    retrying = threading.Event()
+    resume = threading.Event()
+    recorder = Recorder([503, 200])
+
+    def sleep(delay):
+        retrying.set()
+        assert resume.wait(5)
+
+    client = properties.PropertiesClient('k', 'https://example.com',
+        transport=httpx.MockTransport(recorder), max_batch_size=1, sleep=sleep)
+    try:
+        client.enqueue(properties.IDENTIFY_PATH, {'user_id': 'before'})
+        assert retrying.wait(5)
+        client.enqueue(properties.GROUP_PATH, {'account_id': 'queued'})
+        client.shutdown(timeout=0.01)
+        assert client._thread.is_alive()
+        assert not client._http.is_closed
+        assert not client.enqueue(properties.IDENTIFY_PATH, {'user_id': 'after'})
+    finally:
+        resume.set()
+        client.shutdown(timeout=5)
+    assert not client._thread.is_alive()
+    assert client._http.is_closed
+    assert len(recorder.requests) == 3
+
+
+def test_flush_marker_excludes_later_concurrent_calls():
+    later_started = threading.Event()
+    release = threading.Event()
+    recorder = Recorder()
+
+    def handler(request):
+        if json.loads(request.content)['batch'][0]['user_id'] == 'later':
+            later_started.set()
+            assert release.wait(5)
+        return recorder(request)
+
+    client = properties.PropertiesClient('k', 'https://example.com',
+        transport=httpx.MockTransport(handler), max_batch_size=1, flush_interval=60)
+    marker = properties._FlushRequest()
+    client._queue.put((properties.IDENTIFY_PATH, {'user_id': 'before'}))
+    client._queue.put(marker)
+    producer = threading.Thread(target=lambda: client._queue.put(
+        (properties.IDENTIFY_PATH, {'user_id': 'later'})))
+    producer.start()
+    producer.join()
+    client._ensure_thread()
+    try:
+        assert later_started.wait(5)
+        assert marker.done.is_set()
+    finally:
+        release.set()
+        client.shutdown(timeout=5)
+
+
+@pytest.mark.parametrize('header, expected', [('60', 60),
+    ('Tue, 13 Oct 2026 12:01:00 GMT', 60),
+    ('Tue, 13 Oct 2026 11:59:00 GMT', 0), ('invalid', None), ('nan', None), ('inf', None)])
+def test_retry_after_forms(monkeypatch, header, expected):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 13, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(properties, 'datetime', FixedDatetime)
+    response = httpx.Response(429, headers={'Retry-After': header})
+    assert properties._parse_retry_after(response) == expected
+
+
+def test_server_retry_wait_is_not_capped():
+    sleeps = []
+    attempts = []
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(429 if len(attempts) == 1 else 200,
+                              headers={'Retry-After': '60'})
+    client = properties.PropertiesClient('k', 'https://example.com',
+        transport=httpx.MockTransport(handler), sleep=sleeps.append)
+    client.enqueue(properties.IDENTIFY_PATH, {'user_id': 'u'})
+    assert client.flush()
+    client.shutdown()
+    assert sleeps == [60]
+    assert len(attempts) == 2
