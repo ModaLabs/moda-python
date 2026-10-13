@@ -334,9 +334,14 @@ class PropertiesClient:
                 except queue.Empty:
                     entry = None
 
-                if entry is None and self._closed:
-                    self._send_all(buffers)
-                    return
+                if entry is None:
+                    # An enqueue may have followed the timed-out queue read.
+                    # Once closed, this lock prevents any further accepted items.
+                    with self._lock:
+                        should_stop = self._closed and self._queue.empty()
+                    if should_stop:
+                        self._send_all(buffers)
+                        return
                 if isinstance(entry, _FlushRequest):
                     self._send_all(buffers)
                     last_flush = time.monotonic()

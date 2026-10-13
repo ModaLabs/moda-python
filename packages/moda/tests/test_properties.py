@@ -479,3 +479,37 @@ def test_server_retry_wait_is_not_capped():
     client.shutdown()
     assert sleeps == [60]
     assert len(attempts) == 2
+
+
+def test_shutdown_drains_enqueue_after_empty_read(monkeypatch, recorder):
+    empty_read = threading.Event()
+    resume = threading.Event()
+    client = properties.PropertiesClient(
+        "k", "https://example.com", transport=httpx.MockTransport(recorder), flush_interval=60,
+    )
+    original_get = client._queue.get
+
+    def get(*args, **kwargs):
+        try:
+            return original_get(*args, **kwargs)
+        except properties.queue.Empty:
+            if not empty_read.is_set():
+                empty_read.set()
+                assert resume.wait(5)
+            raise
+
+    monkeypatch.setattr(client._queue, "get", get)
+    client._ensure_thread()
+    try:
+        assert empty_read.wait(2)
+        assert client.enqueue(properties.IDENTIFY_PATH, {"user_id": "accepted"})
+        client.shutdown(timeout=0.01)
+        resume.set()
+        client.shutdown(timeout=2)
+        assert not client._thread.is_alive()
+        assert client._queue.empty()
+        assert recorder.bodies() == [{"batch": [{"user_id": "accepted"}]}]
+        assert client._http.is_closed
+    finally:
+        resume.set()
+        client.shutdown(timeout=2)
