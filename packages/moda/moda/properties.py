@@ -48,6 +48,8 @@ REQUEST_TIMEOUT_SECONDS = 10.0
 MAX_ATTEMPTS = 3
 BACKOFF_BASE_SECONDS = 0.5
 BACKOFF_MAX_SECONDS = 8.0
+# Honor server Retry-After up to this bound so a hostile header cannot stall delivery.
+RETRY_AFTER_MAX_SECONDS = 60.0
 DEFAULT_FLUSH_TIMEOUT_SECONDS = 30.0
 
 MAX_ID_LENGTH = 256
@@ -411,7 +413,7 @@ class PropertiesClient:
             delay = min(BACKOFF_MAX_SECONDS, self._backoff_base * (2 ** (attempt - 1)))
             delay = delay * (0.5 + random.random() / 2)
             if retry_after is not None:
-                delay = max(delay, retry_after)
+                delay = max(delay, min(retry_after, RETRY_AFTER_MAX_SECONDS))
             logger.debug("Moda properties: retrying %s in %.2fs (%s)", path, delay, reason)
             self._sleep(delay)
 
@@ -431,7 +433,10 @@ def _short_body(response: httpx.Response) -> str:
         text = response.text
     except Exception:  # pragma: no cover - defensive
         return ""
-    return text[:500]
+    # Escape newlines and other control characters so a server body cannot forge log lines.
+    return "".join(
+        ch if ch.isprintable() else ch.encode("unicode_escape").decode("ascii") for ch in text[:500]
+    )
 
 
 def _parse_retry_after(response: httpx.Response) -> Optional[float]:

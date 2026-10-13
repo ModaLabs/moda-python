@@ -465,20 +465,40 @@ def test_retry_after_forms(monkeypatch, header, expected):
     assert properties._parse_retry_after(response) == expected
 
 
-def test_server_retry_wait_is_not_capped():
+@pytest.mark.parametrize('header, expected', [
+    ('30', 30),
+    ('60', 60),
+    ('86400', properties.RETRY_AFTER_MAX_SECONDS),
+    ('Thu, 01 Jan 2099 00:00:00 GMT', properties.RETRY_AFTER_MAX_SECONDS),
+])
+def test_server_retry_wait_is_honored_up_to_cap(header, expected):
     sleeps = []
     attempts = []
     def handler(request):
         attempts.append(request)
         return httpx.Response(429 if len(attempts) == 1 else 200,
-                              headers={'Retry-After': '60'})
+                              headers={'Retry-After': header})
     client = properties.PropertiesClient('k', 'https://example.com',
         transport=httpx.MockTransport(handler), sleep=sleeps.append)
     client.enqueue(properties.IDENTIFY_PATH, {'user_id': 'u'})
     assert client.flush()
     client.shutdown()
-    assert sleeps == [60]
+    assert sleeps == [expected]
     assert len(attempts) == 2
+
+
+def test_short_body_escapes_control_characters():
+    response = httpx.Response(400, text='ok\n[ERROR] forged\r\x1b[31m\tend')
+    body = properties._short_body(response)
+    assert body == 'ok\\n[ERROR] forged\\r\\x1b[31m\\tend'
+    assert '\n' not in body and '\r' not in body and '\x1b' not in body
+
+
+def test_ids_are_sent_verbatim_to_match_span_attribute(configured):
+    moda.identify(' user123 ', traits={'plan': 'pro'})
+    moda.flush()
+    [item] = configured.bodies()[0]['batch']
+    assert item['user_id'] == ' user123 '
 
 
 def test_shutdown_drains_enqueue_after_empty_read(monkeypatch, recorder):
