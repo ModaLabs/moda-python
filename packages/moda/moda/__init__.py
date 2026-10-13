@@ -103,7 +103,7 @@ def init(
     _moda_instance.init(**init_kwargs)
 
     # identify()/group()/track_subscription() delivery uses the same key and endpoint
-    _properties.configure(api_key=api_key, endpoint=endpoint)
+    _properties.configure(api_key=api_key, endpoint=init_kwargs.get("api_endpoint"))
 
     if debug:
         print("[Moda Debug] Initialization complete")

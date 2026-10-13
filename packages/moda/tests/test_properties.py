@@ -309,12 +309,25 @@ def test_validation_still_runs_before_init():
         moda.identify("")
 
 
-def test_moda_init_configures_properties(monkeypatch):
+@pytest.mark.parametrize(
+    "endpoint_kwargs, expected_endpoint",
+    [
+        ({}, None),
+        ({"endpoint": "https://x.example.com/v1/traces"}, "https://x.example.com/v1/traces"),
+        ({"api_endpoint": "https://custom.example/v1/traces"}, "https://custom.example/v1/traces"),
+        (
+            {"endpoint": "https://x.example.com/v1/traces", "api_endpoint": "https://custom.example/v1/traces"},
+            "https://x.example.com/v1/traces",
+        ),
+    ],
+)
+def test_moda_init_configures_properties(monkeypatch, endpoint_kwargs, expected_endpoint):
     calls = {}
     monkeypatch.setattr(moda.Moda, "init", lambda self, **kw: calls.setdefault("init", kw), raising=False)
     monkeypatch.setattr(properties, "configure", lambda **kw: calls.setdefault("configure", kw))
-    moda.init(api_key="k", endpoint="https://x.example.com/v1/traces")
-    assert calls["configure"] == {"api_key": "k", "endpoint": "https://x.example.com/v1/traces"}
+    moda.init(api_key="k", **endpoint_kwargs)
+    assert calls["init"].get("api_endpoint") == expected_endpoint
+    assert calls["configure"] == {"api_key": "k", "endpoint": expected_endpoint}
 
 
 # ------------------------------------------------------------------ validation
