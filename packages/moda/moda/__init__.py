@@ -39,6 +39,10 @@ from moda.openclaw import (
     trace_openclaw_operation,
 )
 
+# End-user / account properties
+from moda import properties as _properties
+from moda.properties import group, identify, track_subscription
+
 # Vapi integration
 from moda.vapi import (
     process_vapi_end_of_call_report,
@@ -98,14 +102,18 @@ def init(
 
     _moda_instance.init(**init_kwargs)
 
+    # identify()/group()/track_subscription() delivery uses the same key and endpoint
+    _properties.configure(api_key=api_key, endpoint=endpoint)
+
     if debug:
         print("[Moda Debug] Initialization complete")
 
 
 def flush():
-    """Flush all pending telemetry data."""
+    """Flush all pending telemetry data, including queued identify/group/subscription calls."""
     if _moda_instance:
         _moda_instance.flush()
+    _properties.flush()
 
 
 # ============================================================
@@ -169,6 +177,9 @@ __all__ = [
     "flush",
     "conversation_id",
     "user_id",
+    "identify",
+    "group",
+    "track_subscription",
     "set_conversation_id",
     "set_user_id",
     "set_conversation_id_value",
