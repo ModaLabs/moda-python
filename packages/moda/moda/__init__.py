@@ -16,6 +16,7 @@ Usage:
     moda.flush()
 """
 
+import os
 import sys
 from types import ModuleType
 from typing import Optional
@@ -80,7 +81,8 @@ def init(
         kwargs["disable_batch"] = True
 
         print(f"[Moda Debug] Initializing with endpoint: {endpoint or 'default'}")
-        print(f"[Moda Debug] API key: {api_key[:10]}..." if api_key else "[Moda Debug] No API key provided")
+        key_set = bool(api_key or os.getenv("MODA_API_KEY") or os.getenv("TRACELOOP_API_KEY"))
+        print(f"[Moda Debug] API key set: {key_set}")
 
     global _moda_instance
     _moda_instance = Moda()
