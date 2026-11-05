@@ -217,6 +217,8 @@ class TracerWrapper(object):
         cls.__disabled = disabled
 
     def flush(self):
+        if self.__image_uploader:
+            self.__image_uploader.flush()
         if hasattr(self, "_TracerWrapper__spans_processor"):
             self.__spans_processor.force_flush()
         elif hasattr(self, "_TracerWrapper__spans_processors"):

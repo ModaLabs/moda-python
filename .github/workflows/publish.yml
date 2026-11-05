@@ -28,6 +28,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/moda/dist/
+          skip-existing: true
 
   publish-moda-openai:
     runs-on: ubuntu-latest
@@ -51,6 +52,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/moda-openai/dist/
+          skip-existing: true
 
   publish-moda-anthropic:
     runs-on: ubuntu-latest
@@ -74,6 +76,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/moda-anthropic/dist/
+          skip-existing: true
 
   publish-moda-claude-agent-sdk:
     runs-on: ubuntu-latest
@@ -97,3 +100,4 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/moda-claude-agent-sdk/dist/
+          skip-existing: true
