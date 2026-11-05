@@ -25,6 +25,11 @@ from opentelemetry.instrumentation.openai.shared import (
     set_tools_attributes,
 )
 from opentelemetry.instrumentation.openai.shared.config import Config
+from opentelemetry.instrumentation.openai.shared.inline_files import (
+    audio_output_content,
+    file_uploads_enabled,
+    replace_inline_files,
+)
 from opentelemetry.instrumentation.openai.shared.event_emitter import emit_event
 from opentelemetry.instrumentation.openai.shared.event_models import (
     ChoiceEvent,
@@ -475,7 +480,10 @@ async def _set_prompts(span, messages):
         _set_span_attribute(span, f"{prefix}.role", msg.get("role"))
         if msg.get("content"):
             content = copy.deepcopy(msg.get("content"))
-            if isinstance(content, list):
+            if isinstance(content, list) and file_uploads_enabled():
+                content = replace_inline_files(content)
+                content = json.dumps(content)
+            elif isinstance(content, list):
                 content = [
                     (
                         await _process_image_item(
@@ -551,7 +559,7 @@ def _set_completions(span, choices):
                 span, f"{prefix}.refusal", message.get("refusal"))
         else:
             _set_span_attribute(
-                span, f"{prefix}.content", message.get("content"))
+                span, f"{prefix}.content", audio_output_content(message))
 
         function_call = message.get("function_call")
         if function_call:

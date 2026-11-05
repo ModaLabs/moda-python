@@ -768,8 +768,10 @@ class AnthropicInstrumentor(BaseInstrumentor):
         upload_base64_image: Optional[
             Callable[[str, str, str, str], Coroutine[None, None, str]]
         ] = None,
+        upload_file: Optional[Callable[[bytes, str, Optional[str]], Optional[dict]]] = None,
     ):
         super().__init__()
+        Config.upload_file = upload_file
         Config.exception_logger = exception_logger
         Config.enrich_token_usage = enrich_token_usage
         Config.get_common_metrics_attributes = get_common_metrics_attributes

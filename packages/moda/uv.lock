@@ -1224,7 +1224,7 @@ wheels = [
 
 [[package]]
 name = "moda-ai"
-version = "0.1.5"
+version = "0.1.6"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -1291,8 +1291,8 @@ requires-dist = [
     { name = "deprecated", specifier = ">=1.2.14,<2" },
     { name = "httpx", specifier = ">=0.27.0,<1" },
     { name = "jinja2", specifier = ">=3.1.5,<4" },
-    { name = "moda-anthropic" },
-    { name = "moda-openai" },
+    { name = "moda-anthropic", editable = "../moda-anthropic" },
+    { name = "moda-openai", editable = "../moda-openai" },
     { name = "opentelemetry-api", specifier = ">=1.38.0,<2" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.38.0,<2" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.38.0,<2" },
@@ -1339,32 +1339,77 @@ test = [
 
 [[package]]
 name = "moda-anthropic"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.2"
+source = { editable = "../moda-anthropic" }
 dependencies = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-semantic-conventions" },
     { name = "opentelemetry-semantic-conventions-ai" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/97/b1/7dabe97e94ec6730f85d0a81a117b375167bf094046a81b6a463f8cccf8c/moda_anthropic-0.1.0.tar.gz", hash = "sha256:deaedacc988154102aa03d9abfe2f9324b830ee762426ae42cbb8d64e79ce90b", size = 682164, upload-time = "2026-01-22T00:28:12.169Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cc/9a/93374b5800aa8e1bbe8c8813582399cea9ddd2c6dba7329c3408e5ce8f4e/moda_anthropic-0.1.0-py3-none-any.whl", hash = "sha256:7f2b5fb7498cb5fccb309797df535a32034cf00044d235c8583f3e79479f7ef1", size = 18536, upload-time = "2026-01-22T00:28:10.755Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "anthropic", marker = "extra == 'instruments'" },
+    { name = "opentelemetry-api", specifier = ">=1.38.0,<2" },
+    { name = "opentelemetry-instrumentation", specifier = ">=0.59b0" },
+    { name = "opentelemetry-semantic-conventions", specifier = ">=0.59b0" },
+    { name = "opentelemetry-semantic-conventions-ai", specifier = ">=0.4.13,<0.5.0" },
+]
+provides-extras = ["instruments"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "autopep8", specifier = ">=2.2.0,<3" },
+    { name = "pytest", specifier = ">=8.2.2,<9" },
+    { name = "pytest-sugar", specifier = "==1.0.0" },
+    { name = "ruff", specifier = ">=0.4.0" },
+]
+test = [
+    { name = "anthropic", extras = ["bedrock"], specifier = ">=0.74.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.38.0,<2" },
+    { name = "pytest", specifier = ">=8.2.2,<9" },
+    { name = "pytest-asyncio", specifier = ">=0.23.7,<0.24.0" },
+    { name = "pytest-recording", specifier = ">=0.13.1,<0.14.0" },
+    { name = "pytest-sugar", specifier = "==1.0.0" },
+    { name = "vcrpy", specifier = ">=8.0.0,<9" },
 ]
 
 [[package]]
 name = "moda-openai"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.2"
+source = { editable = "../moda-openai" }
 dependencies = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-semantic-conventions" },
     { name = "opentelemetry-semantic-conventions-ai" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/21/aa/49a00ec1c14d40182616d640b06bfa15a51fec73e4500b7299b857c40b9b/moda_openai-0.1.0.tar.gz", hash = "sha256:b8c021db7974211182f7fb6de8da2d70264ebe6e295af6ba83806bac9fe0c632", size = 6976435, upload-time = "2026-01-22T00:28:16.98Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/44/eb0286a7cdbe7dba262409b15b7bfec643aed91fd3d1b79606e5a2ea29f9/moda_openai-0.1.0-py3-none-any.whl", hash = "sha256:c40d27d79e0b861efea267582bfc189790c46cbba5586d95cb50818ff3ce37ab", size = 42898, upload-time = "2026-01-22T00:28:15.174Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "openai", marker = "extra == 'instruments'" },
+    { name = "opentelemetry-api", specifier = ">=1.38.0,<2" },
+    { name = "opentelemetry-instrumentation", specifier = ">=0.59b0" },
+    { name = "opentelemetry-semantic-conventions", specifier = ">=0.59b0" },
+    { name = "opentelemetry-semantic-conventions-ai", specifier = ">=0.4.13,<0.5.0" },
+]
+provides-extras = ["instruments"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "autopep8", specifier = ">=2.2.0,<3" },
+    { name = "ruff", specifier = ">=0.4.0" },
+]
+test = [
+    { name = "openai", extras = ["datalib"], specifier = "==1.99.7" },
+    { name = "opentelemetry-sdk", specifier = ">=1.38.0,<2" },
+    { name = "pytest", specifier = ">=8.2.2,<9" },
+    { name = "pytest-asyncio", specifier = ">=0.23.7,<0.24.0" },
+    { name = "pytest-recording", specifier = ">=0.13.1,<0.14.0" },
+    { name = "pytest-sugar", specifier = "==1.0.0" },
+    { name = "requests", specifier = ">=2.31.0,<3" },
+    { name = "vcrpy", specifier = ">=8.0.0,<9" },
 ]
 
 [[package]]

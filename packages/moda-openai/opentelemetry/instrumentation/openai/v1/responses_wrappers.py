@@ -1,4 +1,5 @@
 import json
+from contextvars import Context
 import pydantic
 import re
 import threading
@@ -19,6 +20,11 @@ from opentelemetry.trace import SpanKind, Span, StatusCode, Tracer
 from typing_extensions import NotRequired
 from wrapt import ObjectProxy
 
+from opentelemetry.instrumentation.openai.shared.inline_files import (
+    file_uploads_enabled,
+    replace_inline_file,
+    replace_inline_files,
+)
 from opentelemetry.instrumentation.openai.shared import (
     _extract_model_name_from_provider_format,
     _set_request_attributes,
@@ -152,6 +158,14 @@ else:
     ResponseOutputMessageParamWithoutId = dict
 
 
+def _capture_conversation_ids() -> dict[str, Optional[str]]:
+    try:
+        from traceloop.sdk.conversation import get_conversation_id, get_user_id
+    except ImportError:  # Moda SDK not installed
+        return {}
+    return {"conversation_id": get_conversation_id(), "user_id": get_user_id()}
+
+
 class TracedData(pydantic.BaseModel):
     start_time: float  # time.time_ns()
     response_id: str
@@ -178,6 +192,8 @@ class TracedData(pydantic.BaseModel):
     # OpenAI service tier
     request_service_tier: Optional[str] = pydantic.Field(default=None)
     response_service_tier: Optional[str] = pydantic.Field(default=None)
+
+    conversation_ids: dict[str, Optional[str]] = pydantic.Field(default_factory=_capture_conversation_ids)
 
     # Trace context - to maintain trace continuity across async operations
     trace_context: Any = pydantic.Field(default=None)
@@ -251,8 +267,35 @@ def prepare_kwargs_for_shared_attributes(kwargs):
     return prepared_kwargs
 
 
+def _set_conversation_attributes(traced_response: TracedData, span: Span) -> None:
+    """moda.conversation_id and moda.user_id, as the chat wrapper sets them, so a
+    Responses turn joins its conversation instead of one derived by ingest."""
+    try:
+        from traceloop.sdk.conversation import compute_conversation_id
+    except ImportError:  # Moda SDK not installed
+        return
+    messages = [{"role": "system", "content": traced_response.instructions}] if traced_response.instructions else []
+    if isinstance(traced_response.input, str):
+        messages.append({"role": "user", "content": traced_response.input})
+    elif isinstance(traced_response.input, list):
+        for item in traced_response.input:
+            item = model_as_dict(item)
+            if isinstance(item, dict) and item.get("type", "message") == "message":
+                messages.append({"role": item.get("role"), "content": item.get("content")})
+    conversation_id = traced_response.conversation_ids.get("conversation_id")
+    if not conversation_id and messages:
+        # Compute without adopting an override from the stream consumer's context.
+        conversation_id = Context().run(compute_conversation_id, messages)
+    if conversation_id:
+        _set_span_attribute(span, "moda.conversation_id", conversation_id)
+    user_id = traced_response.conversation_ids.get("user_id")
+    if user_id:
+        _set_span_attribute(span, "moda.user_id", user_id)
+
+
 def set_data_attributes(traced_response: TracedData, span: Span):
     _set_span_attribute(span, GenAIAttributes.GEN_AI_RESPONSE_ID, traced_response.response_id)
+    _set_conversation_attributes(traced_response, span)
 
     response_model = _extract_model_name_from_provider_format(traced_response.response_model)
     _set_span_attribute(span, GenAIAttributes.GEN_AI_RESPONSE_MODEL, response_model)
@@ -353,6 +396,12 @@ def set_data_attributes(traced_response: TracedData, span: Span):
                     if is_validator_iterator(content):
                         # we're after the actual call here, so we can consume the iterator
                         content = [process_content_block(block) for block in content]
+                    elif isinstance(content, list):
+                        # input_text and friends as the text blocks ingest reads
+                        content = [
+                            process_content_block(block) if isinstance(block, dict) else block for block in content
+                        ]
+                    content = replace_inline_files(content)
                     try:
                         stringified_content = (
                             content if isinstance(content, str) else json.dumps(content)
@@ -378,15 +427,16 @@ def set_data_attributes(traced_response: TracedData, span: Span):
                     )
                     output_image_url = block_dict.get("output", {}).get("image_url")
                     if output_image_url:
+                        # The screenshot after a computer action, usually a data URL.
                         _set_span_attribute(
                             span,
                             f"{GenAIAttributes.GEN_AI_PROMPT}.{prompt_index}.content",
                             json.dumps(
                                 [
-                                    {
+                                    replace_inline_file({
                                         "type": "image_url",
                                         "image_url": {"url": output_image_url},
-                                    }
+                                    })
                                 ]
                             ),
                         )
@@ -411,7 +461,18 @@ def set_data_attributes(traced_response: TracedData, span: Span):
                 # TODO: handle other block types
 
         _set_span_attribute(span, f"{GenAIAttributes.GEN_AI_COMPLETION}.0.role", "assistant")
-        if traced_response.output_text:
+        # Images the model generated come after its text, as files.
+        generated = [
+            replace_inline_file(block_dict)
+            for block_dict in (model_as_dict(block) for block in traced_response.output_blocks.values())
+            if file_uploads_enabled() and block_dict.get("type") == "image_generation_call" and block_dict.get("result")
+        ]
+        if generated:
+            text = [{"type": "text", "text": traced_response.output_text}] if traced_response.output_text else []
+            _set_span_attribute(
+                span, f"{GenAIAttributes.GEN_AI_COMPLETION}.0.content", json.dumps(text + generated)
+            )
+        elif traced_response.output_text:
             _set_span_attribute(
                 span, f"{GenAIAttributes.GEN_AI_COMPLETION}.0.content", traced_response.output_text
             )
@@ -498,6 +559,7 @@ def responses_get_or_create_wrapper(tracer: Tracer, wrapped, instance, args, kwa
     if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
         return wrapped(*args, **kwargs)
     start_time = time.time_ns()
+    conversation_ids = _capture_conversation_ids()
 
     # Remove OpenAI sentinel values (NOT_GIVEN, Omit) to allow chained .get() calls
     non_sentinel_kwargs = _sanitize_sentinel_values(kwargs)
@@ -520,6 +582,7 @@ def responses_get_or_create_wrapper(tracer: Tracer, wrapped, instance, args, kwa
                 response=response,
                 start_time=start_time,
                 request_kwargs=non_sentinel_kwargs,
+                conversation_ids=conversation_ids,
                 tracer=tracer,
             )
     except Exception as e:
@@ -529,6 +592,7 @@ def responses_get_or_create_wrapper(tracer: Tracer, wrapped, instance, args, kwa
             existing_data = responses[response_id].model_dump()
         try:
             traced_data = TracedData(
+                conversation_ids=existing_data.get("conversation_ids", conversation_ids),
                 start_time=existing_data.get("start_time", start_time),
                 response_id=response_id or "",
                 input=process_input(
@@ -608,6 +672,7 @@ def responses_get_or_create_wrapper(tracer: Tracer, wrapped, instance, args, kwa
             except Exception:
                 pass
         traced_data = TracedData(
+            conversation_ids=existing_data.get("conversation_ids", conversation_ids),
             start_time=existing_data.get("start_time", start_time),
             response_id=parsed_response.id,
             input=process_input(existing_data.get("input", non_sentinel_kwargs.get("input"))),
@@ -664,6 +729,7 @@ async def async_responses_get_or_create_wrapper(
     if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
         return await wrapped(*args, **kwargs)
     start_time = time.time_ns()
+    conversation_ids = _capture_conversation_ids()
 
     # Remove OpenAI sentinel values (NOT_GIVEN, Omit) to allow chained .get() calls
     non_sentinel_kwargs = _sanitize_sentinel_values(kwargs)
@@ -686,6 +752,7 @@ async def async_responses_get_or_create_wrapper(
                 response=response,
                 start_time=start_time,
                 request_kwargs=non_sentinel_kwargs,
+                conversation_ids=conversation_ids,
                 tracer=tracer,
             )
     except Exception as e:
@@ -695,6 +762,7 @@ async def async_responses_get_or_create_wrapper(
             existing_data = responses[response_id].model_dump()
         try:
             traced_data = TracedData(
+                conversation_ids=existing_data.get("conversation_ids", conversation_ids),
                 start_time=existing_data.get("start_time", start_time),
                 response_id=response_id or "",
                 input=process_input(
@@ -771,6 +839,7 @@ async def async_responses_get_or_create_wrapper(
                 pass
 
         traced_data = TracedData(
+            conversation_ids=existing_data.get("conversation_ids", conversation_ids),
             start_time=existing_data.get("start_time", start_time),
             response_id=parsed_response.id,
             input=process_input(existing_data.get("input", non_sentinel_kwargs.get("input"))),
@@ -898,6 +967,7 @@ class ResponseStream(ObjectProxy):
         request_kwargs=None,
         tracer=None,
         traced_data=None,
+        conversation_ids=None,
     ):
         super().__init__(response)
         self._span = span
@@ -906,6 +976,7 @@ class ResponseStream(ObjectProxy):
         self._request_kwargs = _sanitize_sentinel_values(request_kwargs or {})
         self._tracer = tracer
         self._traced_data = traced_data or TracedData(
+            conversation_ids=conversation_ids if conversation_ids is not None else _capture_conversation_ids(),
             start_time=start_time,
             response_id="",
             input=process_input(self._request_kwargs.get("input", [])),

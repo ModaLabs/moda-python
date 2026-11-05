@@ -20,6 +20,7 @@ class OpenAIInstrumentor(BaseInstrumentor):
             Callable[[str, str, str, str], Coroutine[None, None, str]]
         ] = lambda *args: "",
         enable_trace_context_propagation: bool = True,
+        upload_file: Optional[Callable[[bytes, str, Optional[str]], Optional[dict]]] = None,
         use_legacy_attributes: bool = True,
     ):
         super().__init__()
@@ -27,6 +28,7 @@ class OpenAIInstrumentor(BaseInstrumentor):
         Config.exception_logger = exception_logger
         Config.get_common_metrics_attributes = get_common_metrics_attributes
         Config.upload_base64_image = upload_base64_image
+        Config.upload_file = upload_file
         Config.enable_trace_context_propagation = enable_trace_context_propagation
         Config.use_legacy_attributes = use_legacy_attributes
 
