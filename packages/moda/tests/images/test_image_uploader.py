@@ -1,4 +1,5 @@
 import asyncio
+from time import monotonic
 
 import pytest
 from aiohttp import web
@@ -66,8 +67,14 @@ async def test_raises_when_either_step_fails(options):
 async def test_gives_up_on_a_hanging_server(monkeypatch):
     monkeypatch.setattr(image_uploader, "UPLOAD_TIMEOUT_SECONDS", 0.2)
     server, _ = await serve(hang=True)
-    try:
+    async def expect_upload_timeout():
+        started = monotonic()
         with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(run(server), timeout=5)
+            await run(server)
+        assert 0.2 <= monotonic() - started < 2
+
+    try:
+        # The watchdog must fail the test, rather than satisfy pytest.raises.
+        await asyncio.wait_for(expect_upload_timeout(), timeout=5)
     finally:
         await server.close()
