@@ -157,6 +157,7 @@ class TracerWrapper(object):
                 image_uploader.aupload_base64_image,
                 instruments,
                 block_instruments,
+                file_uploader=getattr(image_uploader, "upload_file", None),
             )
 
             obj.__content_allow_list = ContentAllowList()
@@ -462,6 +463,7 @@ def init_instrumentations(
     base64_image_uploader: Callable[[str, str, str, str], str],
     instruments: Optional[Set[Instruments]] = None,
     block_instruments: Optional[Set[Instruments]] = None,
+    file_uploader: Optional[Callable[[bytes, str, Optional[str]], Optional[dict]]] = None,
 ):
     block_instruments = block_instruments or set()
     # explictly test for None since empty set is a False value
@@ -480,7 +482,7 @@ def init_instrumentations(
                 instrument_set = True
         elif instrument == Instruments.ANTHROPIC:
             if init_anthropic_instrumentor(
-                should_enrich_metrics, base64_image_uploader
+                should_enrich_metrics, base64_image_uploader, file_uploader
             ):
                 instrument_set = True
         elif instrument == Instruments.BEDROCK:
@@ -534,7 +536,7 @@ def init_instrumentations(
             if init_ollama_instrumentor():
                 instrument_set = True
         elif instrument == Instruments.OPENAI:
-            if init_openai_instrumentor(should_enrich_metrics, base64_image_uploader):
+            if init_openai_instrumentor(should_enrich_metrics, base64_image_uploader, file_uploader):
                 instrument_set = True
         elif instrument == Instruments.OPENAI_AGENTS:
             if init_openai_agents_instrumentor():
@@ -605,6 +607,7 @@ def init_instrumentations(
 def init_openai_instrumentor(
     should_enrich_metrics: bool,
     base64_image_uploader: Callable[[str, str, str, str], str],
+    file_uploader: Optional[Callable[[bytes, str, Optional[str]], Optional[dict]]] = None,
 ):
     try:
         if is_package_installed("openai"):
@@ -614,6 +617,7 @@ def init_openai_instrumentor(
                 enrich_assistant=should_enrich_metrics,
                 get_common_metrics_attributes=metrics_common_attributes,
                 upload_base64_image=base64_image_uploader,
+                upload_file=file_uploader,
             )
             if not instrumentor.is_instrumented_by_opentelemetry:
                 instrumentor.instrument()
@@ -627,6 +631,7 @@ def init_openai_instrumentor(
 def init_anthropic_instrumentor(
     should_enrich_metrics: bool,
     base64_image_uploader: Callable[[str, str, str, str], str],
+    file_uploader: Optional[Callable[[bytes, str, Optional[str]], Optional[dict]]] = None,
 ):
     try:
         if is_package_installed("anthropic"):
@@ -636,6 +641,7 @@ def init_anthropic_instrumentor(
                 enrich_token_usage=should_enrich_metrics,
                 get_common_metrics_attributes=metrics_common_attributes,
                 upload_base64_image=base64_image_uploader,
+                upload_file=file_uploader,
             )
             if not instrumentor.is_instrumented_by_opentelemetry:
                 instrumentor.instrument()

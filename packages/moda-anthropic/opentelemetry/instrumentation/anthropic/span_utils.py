@@ -3,6 +3,7 @@ import logging
 from typing import Any, Dict
 
 from opentelemetry.instrumentation.anthropic.config import Config
+from opentelemetry.instrumentation.anthropic.inline_files import file_uploads_enabled, replace_inline_file
 from opentelemetry.instrumentation.anthropic.utils import (
     JSONEncoder,
     dont_throw,
@@ -59,6 +60,9 @@ async def _dump_content(message_index, content, span):
         # This is more commonly used in prompt caching.
         if all([model_as_dict(item).get("type") == "text" for item in content]):
             return "".join([model_as_dict(item).get("text") for item in content])
+
+        if file_uploads_enabled():
+            return json.dumps([replace_inline_file(model_as_dict(item)) for item in content], cls=JSONEncoder)
 
         content = [
             (

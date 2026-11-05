@@ -1,6 +1,6 @@
 [project]
 name = "moda-ai"
-version = "0.1.5"
+version = "0.1.6"
 description = "Moda SDK - LLM Observability with Automatic Conversation Threading"
 authors = [
   { name = "Moda Labs", email = "founders@modaflows.com" },
@@ -20,8 +20,8 @@ dependencies = [
   "opentelemetry-instrumentation-threading>=0.59b0",
   "opentelemetry-instrumentation-redis>=0.59b0",
   "opentelemetry-semantic-conventions-ai>=0.4.13,<0.5.0",
-  "moda-openai",
-  "moda-anthropic",
+  "moda-openai>=0.1.2",
+  "moda-anthropic>=0.1.2",
   "colorama>=0.4.6,<0.5.0",
   "tenacity>=8.2.3,<10.0",
   "pydantic>=1",
@@ -126,6 +126,11 @@ exclude = [".git", "__pycache__", "build", "dist", ".venv", ".pytest_cache"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]
+
+[tool.uv.sources]
+# Develop against the sibling packages; published metadata keeps the version pins.
+moda-openai = { path = "../moda-openai", editable = true }
+moda-anthropic = { path = "../moda-anthropic", editable = true }
 
 [tool.uv]
 constraint-dependencies = ["urllib3>=2.6.3", "pip>=25.3"]
