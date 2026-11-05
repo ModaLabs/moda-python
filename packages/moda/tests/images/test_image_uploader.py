@@ -334,3 +334,44 @@ async def test_upload_file_sends_a_concurrent_repeated_file_once(monkeypatch):
     finally:
         await flush(uploader)
         await server.close()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_queue_rejection_returns_none_and_can_retry(monkeypatch):
+    monkeypatch.setattr(image_uploader, "MAX_PENDING_BYTES", len(IMAGE))
+    uploader = ImageUploader("http://unused", "key")
+    release = threading.Event()
+    sent = []
+
+    async def put(url, data, mime_type):
+        assert await asyncio.to_thread(release.wait, 5)
+        sent.append(data)
+
+    monkeypatch.setattr(uploader, "_put_file", put)
+    try:
+        ref = uploader.upload_file(IMAGE, "image/png")
+        assert uploader.upload_file(IMAGE, "image/png") == ref
+        assert uploader.upload_file(b"other", "text/plain") is None
+        assert hashlib.sha256(b"other").hexdigest() not in uploader._sent
+        release.set()
+        await flush(uploader)
+        assert uploader.upload_file(b"other", "text/plain") is not None
+        await flush(uploader)
+        assert sent == [IMAGE, b"other"]
+        assert uploader._pending_bytes == 0
+    finally:
+        release.set()
+        await flush(uploader)
+
+
+def test_file_limit_fits_upload_queue():
+    assert image_uploader.MAX_FILE_BYTES <= image_uploader.MAX_PENDING_BYTES
+
+
+def test_upload_file_worker_rejection_does_not_reserve_hash():
+    uploader = ImageUploader("http://unused", "key")
+    uploader._workers().shutdown()
+    assert uploader.upload_file(IMAGE, "image/png") is None
+    assert not uploader._sent
+    assert not uploader._pending
+    assert uploader._pending_bytes == 0

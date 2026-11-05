@@ -15,8 +15,8 @@ UPLOAD_WORKERS = 4
 # Images waiting to upload, at most, so a stalled ingest can't grow memory without limit.
 MAX_PENDING_BYTES = 64 * 1024 * 1024
 FLUSH_TIMEOUT_SECONDS = 30
-# Ingest's limit for one file (PUT /v1/files/:sha256).
-MAX_FILE_BYTES = 95_000_000
+# One file must fit both ingest's limit and the bounded upload queue.
+MAX_FILE_BYTES = min(95_000_000, MAX_PENDING_BYTES)
 # Hashes this process has sent, so a file repeated in every later prompt's
 # history uploads once. Oldest forgotten first.
 MAX_REMEMBERED_FILES = 10_000
@@ -52,7 +52,7 @@ class ImageUploader:
     def upload_file(self, data: bytes, mime_type: str, name: Optional[str] = None) -> Optional[dict]:
         """Start uploading a file and return the reference block for the span.
 
-        None when the file can't be kept (too large); the caller puts a
+        None when the file can't be kept (empty, too large, or queue full); the caller puts a
         placeholder in its place.
         """
         if len(data) == 0 or len(data) > MAX_FILE_BYTES:
@@ -63,7 +63,8 @@ class ImageUploader:
         if name:
             ref["name"] = name
         self._reset_after_fork()
-        self._submit_file(sha256, data, mime_type)
+        if not self._submit_file(sha256, data, mime_type):
+            return None
         return ref
 
     def upload_base64_image(
@@ -100,24 +101,29 @@ class ImageUploader:
             self._pending.add(future)
         future.add_done_callback(self._forget)
 
-    def _submit_file(self, sha256: str, data: bytes, mime_type: str) -> None:
+    def _submit_file(self, sha256: str, data: bytes, mime_type: str) -> bool:
         url = f"{self.base_url}/v1/files/{sha256}"
         size = len(data)
         with self._lock:
-            # Check and reserve under one lock so concurrent callers share one upload.
+            # Checking and reserving the hash must be atomic across model calls.
             if sha256 in self._sent:
                 self._sent.move_to_end(sha256)
-                return
+                return True
             workers = self._workers()
             if self._pending_bytes + size > MAX_PENDING_BYTES:
                 self.logger.warning("Too many files waiting to upload; skipping %s", url)
-                return
+                return False
             # Remembered now so the next prompt doesn't send it again; forgotten if it fails.
+            try:
+                future = workers.submit(self._send_file, url, sha256, data, mime_type, size)
+            except RuntimeError:
+                self.logger.warning("File upload worker unavailable; skipping %s", url)
+                return False
             self._remember(sha256)
             self._pending_bytes += size
-            future = workers.submit(self._send_file, url, sha256, data, mime_type, size)
             self._pending.add(future)
         future.add_done_callback(self._forget)
+        return True
 
     def _remember(self, sha256: str) -> None:
         self._sent[sha256] = None
