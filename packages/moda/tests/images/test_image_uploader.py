@@ -375,3 +375,18 @@ def test_upload_file_worker_rejection_does_not_reserve_hash():
     assert not uploader._sent
     assert not uploader._pending
     assert uploader._pending_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_upload_file_accepts_exact_size_limit(monkeypatch):
+    server, uploads = await serve_files()
+    uploader = uploader_for(server)
+    monkeypatch.setattr(image_uploader, "MAX_PENDING_BYTES", len(IMAGE))
+    monkeypatch.setattr(image_uploader, "MAX_FILE_BYTES", len(IMAGE))
+    try:
+        assert uploader.upload_file(IMAGE + b"x", "image/png") is None
+        assert uploader.upload_file(IMAGE, "image/png") is not None
+        await flush(uploader)
+        assert len(uploads) == 1
+    finally:
+        await server.close()
