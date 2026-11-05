@@ -193,3 +193,64 @@ def test_responses_turns_join_their_conversation(uploads):
     with context.set_conversation_id("conv-e2e"):
         set_data_attributes(_responses_turn(), span)
     assert span.attributes["moda.conversation_id"] == "conv-e2e"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("other_user", [False, True])
+async def test_response_stream_keeps_request_ids(async_stream, other_user):
+    from contextlib import ExitStack
+    from unittest.mock import MagicMock
+    from opentelemetry.instrumentation.openai.v1.responses_wrappers import ResponseStream
+
+    context = pytest.importorskip("traceloop.sdk.context")
+
+    class EmptyStream:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise StopIteration
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    span = MagicMock()
+    with context.set_user_id("request-user"), context.set_conversation_id("request-conversation"):
+        stream = ResponseStream(
+            span=span, response=EmptyStream(), start_time=1,
+            request_kwargs={"input": "hello", "model": "gpt-4o"},
+        )
+    with ExitStack() as scopes:
+        if other_user:
+            scopes.enter_context(context.set_user_id("consumer-user"))
+            scopes.enter_context(context.set_conversation_id("consumer-conversation"))
+        if async_stream:
+            async for _ in stream:
+                pass
+        else:
+            list(stream)
+    span.set_attribute.assert_any_call("moda.user_id", "request-user")
+    span.set_attribute.assert_any_call("moda.conversation_id", "request-conversation")
+    assert not any("consumer-user" in call.args or "consumer-conversation" in call.args
+                   for call in span.set_attribute.call_args_list)
+
+
+def test_responses_without_request_user_do_not_adopt_consumer_ids(uploads):
+    context = pytest.importorskip("traceloop.sdk.context")
+    from traceloop.sdk.conversation import compute_conversation_id
+    from opentelemetry.instrumentation.openai.v1.responses_wrappers import set_data_attributes
+
+    turn = _responses_turn()
+    expected = compute_conversation_id([
+        {"role": "system", "content": turn.instructions},
+        {"role": "user", "content": turn.input[0]["content"]},
+    ])
+    span = RecordingSpan()
+    with context.set_user_id("consumer-user"), context.set_conversation_id("consumer-conversation"):
+        set_data_attributes(turn, span)
+    assert "moda.user_id" not in span.attributes
+    assert span.attributes["moda.conversation_id"] == expected

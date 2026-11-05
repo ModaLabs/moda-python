@@ -1,4 +1,5 @@
 import json
+from contextvars import copy_context
 import pydantic
 import re
 import threading
@@ -184,6 +185,8 @@ class TracedData(pydantic.BaseModel):
     request_service_tier: Optional[str] = pydantic.Field(default=None)
     response_service_tier: Optional[str] = pydantic.Field(default=None)
 
+    conversation_context: Any = pydantic.Field(default_factory=copy_context)
+
     # Trace context - to maintain trace continuity across async operations
     trace_context: Any = pydantic.Field(default=None)
 
@@ -257,6 +260,11 @@ def prepare_kwargs_for_shared_attributes(kwargs):
 
 
 def _set_conversation_attributes(traced_response: TracedData, span: Span) -> None:
+    # Use request-time context even when a stream finishes in another user's scope.
+    traced_response.conversation_context.copy().run(_write_conversation_attributes, traced_response, span)
+
+
+def _write_conversation_attributes(traced_response: TracedData, span: Span) -> None:
     """moda.conversation_id and moda.user_id, as the chat wrapper sets them, so a
     Responses turn joins its conversation instead of one derived by ingest."""
     try:
@@ -544,6 +552,7 @@ def responses_get_or_create_wrapper(tracer: Tracer, wrapped, instance, args, kwa
     if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
         return wrapped(*args, **kwargs)
     start_time = time.time_ns()
+    conversation_context = copy_context()
 
     # Remove OpenAI sentinel values (NOT_GIVEN, Omit) to allow chained .get() calls
     non_sentinel_kwargs = _sanitize_sentinel_values(kwargs)
@@ -566,6 +575,7 @@ def responses_get_or_create_wrapper(tracer: Tracer, wrapped, instance, args, kwa
                 response=response,
                 start_time=start_time,
                 request_kwargs=non_sentinel_kwargs,
+                conversation_context=conversation_context,
                 tracer=tracer,
             )
     except Exception as e:
@@ -575,6 +585,7 @@ def responses_get_or_create_wrapper(tracer: Tracer, wrapped, instance, args, kwa
             existing_data = responses[response_id].model_dump()
         try:
             traced_data = TracedData(
+                conversation_context=existing_data.get("conversation_context", conversation_context),
                 start_time=existing_data.get("start_time", start_time),
                 response_id=response_id or "",
                 input=process_input(
@@ -654,6 +665,7 @@ def responses_get_or_create_wrapper(tracer: Tracer, wrapped, instance, args, kwa
             except Exception:
                 pass
         traced_data = TracedData(
+            conversation_context=existing_data.get("conversation_context", conversation_context),
             start_time=existing_data.get("start_time", start_time),
             response_id=parsed_response.id,
             input=process_input(existing_data.get("input", non_sentinel_kwargs.get("input"))),
@@ -710,6 +722,7 @@ async def async_responses_get_or_create_wrapper(
     if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
         return await wrapped(*args, **kwargs)
     start_time = time.time_ns()
+    conversation_context = copy_context()
 
     # Remove OpenAI sentinel values (NOT_GIVEN, Omit) to allow chained .get() calls
     non_sentinel_kwargs = _sanitize_sentinel_values(kwargs)
@@ -732,6 +745,7 @@ async def async_responses_get_or_create_wrapper(
                 response=response,
                 start_time=start_time,
                 request_kwargs=non_sentinel_kwargs,
+                conversation_context=conversation_context,
                 tracer=tracer,
             )
     except Exception as e:
@@ -741,6 +755,7 @@ async def async_responses_get_or_create_wrapper(
             existing_data = responses[response_id].model_dump()
         try:
             traced_data = TracedData(
+                conversation_context=existing_data.get("conversation_context", conversation_context),
                 start_time=existing_data.get("start_time", start_time),
                 response_id=response_id or "",
                 input=process_input(
@@ -817,6 +832,7 @@ async def async_responses_get_or_create_wrapper(
                 pass
 
         traced_data = TracedData(
+            conversation_context=existing_data.get("conversation_context", conversation_context),
             start_time=existing_data.get("start_time", start_time),
             response_id=parsed_response.id,
             input=process_input(existing_data.get("input", non_sentinel_kwargs.get("input"))),
@@ -944,6 +960,7 @@ class ResponseStream(ObjectProxy):
         request_kwargs=None,
         tracer=None,
         traced_data=None,
+        conversation_context=None,
     ):
         super().__init__(response)
         self._span = span
@@ -952,6 +969,7 @@ class ResponseStream(ObjectProxy):
         self._request_kwargs = _sanitize_sentinel_values(request_kwargs or {})
         self._tracer = tracer
         self._traced_data = traced_data or TracedData(
+            conversation_context=conversation_context if conversation_context is not None else copy_context(),
             start_time=start_time,
             response_id="",
             input=process_input(self._request_kwargs.get("input", [])),
