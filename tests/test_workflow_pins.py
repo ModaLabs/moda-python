@@ -43,8 +43,8 @@ def test_no_remote_script_piped_to_shell(path):
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=workflow_id)
 def test_setup_uv_cache_disabled(path):
-    # The default cache fails the job when uv never ran, and lets a release job
-    # restore a cache written by an earlier run.
+    # The default cache would let a release job restore a cache written by an
+    # earlier run. The curl installer never cached, so keep it that way.
     text = path.read_text()
     assert text.count("astral-sh/setup-uv@") == len(SETUP_UV.findall(text))
 
