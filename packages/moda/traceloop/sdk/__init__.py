@@ -165,10 +165,12 @@ class Moda:
             or os.getenv("TRACELOOP_BASE_URL")
             or api_endpoint
         )
+        # A key passed to init() is the caller's choice and wins over the environment;
+        # the other way round, a stray MODA_API_KEY sends traces to another tenant.
         api_key = (
-            os.getenv("MODA_API_KEY")
+            api_key
+            or os.getenv("MODA_API_KEY")
             or os.getenv("TRACELOOP_API_KEY")
-            or api_key
         )
         Moda.__app_name = app_name
 
