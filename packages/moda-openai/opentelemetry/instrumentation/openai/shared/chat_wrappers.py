@@ -428,6 +428,9 @@ def _set_token_counter_metrics(token_counter, usage, shared_attributes):
             token_counter.record(val, attributes=attributes_with_token_type)
 
 
+IMAGE_NOT_CAPTURED = "[image not captured: upload failed]"
+
+
 def _is_base64_image(item):
     if not isinstance(item, dict):
         return False
@@ -445,11 +448,17 @@ async def _process_image_item(item, trace_id, span_id, message_index, content_in
     if not Config.upload_base64_image:
         return item
 
-    image_format = item["image_url"]["url"].split(";")[0].split("/")[1]
-    image_name = f"message_{message_index}_content_{content_index}.{image_format}"
-    base64_string = item["image_url"]["url"].split(",")[1]
-    # Convert trace_id and span_id to strings as expected by upload function
-    url = await Config.upload_base64_image(str(trace_id), str(span_id), image_name, base64_string)
+    # A failed upload must not cost the message: without this, the exception
+    # reaches @dont_throw and the whole prompt is left out of the span.
+    try:
+        image_format = item["image_url"]["url"].split(";")[0].split("/")[1]
+        image_name = f"message_{message_index}_content_{content_index}.{image_format}"
+        base64_string = item["image_url"]["url"].split(",")[1]
+        # Convert trace_id and span_id to strings as expected by upload function
+        url = await Config.upload_base64_image(str(trace_id), str(span_id), image_name, base64_string)
+    except Exception as e:
+        logger.warning("Image upload failed; keeping the message without it: %s", e)
+        return {"type": "text", "text": IMAGE_NOT_CAPTURED}
 
     return {"type": "image_url", "image_url": {"url": url}}
 

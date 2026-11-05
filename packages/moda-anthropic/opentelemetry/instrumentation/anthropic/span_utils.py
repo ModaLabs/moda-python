@@ -17,6 +17,8 @@ from opentelemetry.semconv_ai import SpanAttributes
 
 logger = logging.getLogger(__name__)
 
+IMAGE_NOT_CAPTURED = "[image not captured: upload failed]"
+
 
 def _is_base64_image(item: Dict[str, Any]) -> bool:
     if not isinstance(item, dict):
@@ -35,10 +37,16 @@ async def _process_image_item(item, trace_id, span_id, message_index, content_in
     if not Config.upload_base64_image:
         return item
 
-    image_format = item.get("source").get("media_type").split("/")[1]
-    image_name = f"message_{message_index}_content_{content_index}.{image_format}"
-    base64_string = item.get("source").get("data")
-    url = await Config.upload_base64_image(trace_id, span_id, image_name, base64_string)
+    # A failed upload must not cost the message: without this, the exception
+    # reaches @dont_throw and the whole prompt is left out of the span.
+    try:
+        image_format = item.get("source").get("media_type").split("/")[1]
+        image_name = f"message_{message_index}_content_{content_index}.{image_format}"
+        base64_string = item.get("source").get("data")
+        url = await Config.upload_base64_image(trace_id, span_id, image_name, base64_string)
+    except Exception as e:
+        logger.warning("Image upload failed; keeping the message without it: %s", e)
+        return {"type": "text", "text": IMAGE_NOT_CAPTURED}
 
     return {"type": "image_url", "image_url": {"url": url}}
 
