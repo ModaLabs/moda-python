@@ -63,12 +63,7 @@ class ImageUploader:
         if name:
             ref["name"] = name
         self._reset_after_fork()
-        with self._lock:
-            sent = sha256 in self._sent
-            if sent:
-                self._sent.move_to_end(sha256)
-        if not sent:
-            self._submit_file(sha256, data, mime_type)
+        self._submit_file(sha256, data, mime_type)
         return ref
 
     def upload_base64_image(
@@ -109,6 +104,10 @@ class ImageUploader:
         url = f"{self.base_url}/v1/files/{sha256}"
         size = len(data)
         with self._lock:
+            # Check and reserve under one lock so concurrent callers share one upload.
+            if sha256 in self._sent:
+                self._sent.move_to_end(sha256)
+                return
             workers = self._workers()
             if self._pending_bytes + size > MAX_PENDING_BYTES:
                 self.logger.warning("Too many files waiting to upload; skipping %s", url)

@@ -251,7 +251,13 @@ async def test_upload_file_returns_the_reference_and_sends_the_bytes_under_their
         ref = uploader.upload_file(video, "video/mp4", "run.mp4")
         await flush(uploader)
         sha = hashlib.sha256(video).hexdigest()
-        assert ref == {"type": "artifact_ref", "sha256": sha, "mime_type": "video/mp4", "size_bytes": len(video), "name": "run.mp4"}
+        assert ref == {
+            "type": "artifact_ref",
+            "sha256": sha,
+            "mime_type": "video/mp4",
+            "size_bytes": len(video),
+            "name": "run.mp4",
+        }
         assert len(uploads) == 1
         path_sha, headers, body = uploads[0]
         assert path_sha == sha and body == video
@@ -297,3 +303,34 @@ def test_upload_file_skips_empty_and_oversized_files(monkeypatch):
     monkeypatch.setattr(image_uploader, "MAX_FILE_BYTES", 4)
     assert uploader.upload_file(b"", "image/png") is None
     assert uploader.upload_file(b"12345", "image/png") is None
+
+
+@pytest.mark.asyncio
+async def test_upload_file_sends_a_concurrent_repeated_file_once(monkeypatch):
+    server, uploads = await serve_files()
+    uploader = uploader_for(server)
+    callers = 8
+    barrier = threading.Barrier(callers)
+    submit_file = uploader._submit_file
+
+    def submit_together(*args):
+        # Force every caller to reach submission before any hash is reserved.
+        barrier.wait(timeout=5)
+        return submit_file(*args)
+
+    monkeypatch.setattr(uploader, "_submit_file", submit_together)
+
+    def upload_concurrently():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=callers) as pool:
+            return list(pool.map(lambda _: uploader.upload_file(IMAGE, "image/png"), range(callers)))
+
+    try:
+        refs = await asyncio.to_thread(upload_concurrently)
+        await flush(uploader)
+        assert len(uploads) == 1
+        assert all(ref == refs[0] for ref in refs)
+        assert refs[0]["sha256"] == hashlib.sha256(IMAGE).hexdigest()
+        assert uploader._pending_bytes == 0
+    finally:
+        await flush(uploader)
+        await server.close()
