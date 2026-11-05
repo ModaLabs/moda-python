@@ -256,8 +256,31 @@ def prepare_kwargs_for_shared_attributes(kwargs):
     return prepared_kwargs
 
 
+def _set_conversation_attributes(traced_response: TracedData, span: Span) -> None:
+    """moda.conversation_id and moda.user_id, as the chat wrapper sets them, so a
+    Responses turn joins its conversation instead of one derived by ingest."""
+    try:
+        from traceloop.sdk.conversation import compute_conversation_id, get_user_id
+    except ImportError:  # Moda SDK not installed
+        return
+    messages = [{"role": "system", "content": traced_response.instructions}] if traced_response.instructions else []
+    if isinstance(traced_response.input, str):
+        messages.append({"role": "user", "content": traced_response.input})
+    elif isinstance(traced_response.input, list):
+        for item in traced_response.input:
+            item = model_as_dict(item)
+            if isinstance(item, dict) and item.get("type", "message") == "message":
+                messages.append({"role": item.get("role"), "content": item.get("content")})
+    if messages:
+        _set_span_attribute(span, "moda.conversation_id", compute_conversation_id(messages))
+    user_id = get_user_id()
+    if user_id:
+        _set_span_attribute(span, "moda.user_id", user_id)
+
+
 def set_data_attributes(traced_response: TracedData, span: Span):
     _set_span_attribute(span, GenAIAttributes.GEN_AI_RESPONSE_ID, traced_response.response_id)
+    _set_conversation_attributes(traced_response, span)
 
     response_model = _extract_model_name_from_provider_format(traced_response.response_model)
     _set_span_attribute(span, GenAIAttributes.GEN_AI_RESPONSE_MODEL, response_model)
@@ -358,6 +381,11 @@ def set_data_attributes(traced_response: TracedData, span: Span):
                     if is_validator_iterator(content):
                         # we're after the actual call here, so we can consume the iterator
                         content = [process_content_block(block) for block in content]
+                    elif isinstance(content, list):
+                        # input_text and friends as the text blocks ingest reads
+                        content = [
+                            process_content_block(block) if isinstance(block, dict) else block for block in content
+                        ]
                     content = replace_inline_files(content)
                     try:
                         stringified_content = (

@@ -158,3 +158,38 @@ def test_responses_computer_screenshots_and_generated_images_become_references(u
     completion = json.loads(span.attributes["gen_ai.completion.0.content"])
     assert completion[0] == {"type": "text", "text": "Here it is"}
     assert completion[1]["type"] == "artifact_ref"
+
+
+
+def _responses_turn():
+    from opentelemetry.instrumentation.openai.v1.responses_wrappers import TracedData
+
+    return TracedData.model_construct(
+        start_time=0, response_id="resp", tools=None, instructions=None, usage=None,
+        input=[{"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "What does the report say?"},
+            {"type": "input_file", "filename": "r.pdf", "file_data": f"data:application/pdf;base64,{b64(b'%PDF')}"},
+        ]}],
+        output_blocks={}, output_text="Revenue is up.", response_model=None, request_reasoning_summary=None,
+        request_reasoning_effort=None, response_reasoning_effort=None, response_service_tier=None,
+    )
+
+
+def test_responses_input_text_is_recorded_as_text(uploads):
+    from opentelemetry.instrumentation.openai.v1.responses_wrappers import set_data_attributes
+
+    span = RecordingSpan()
+    set_data_attributes(_responses_turn(), span)
+    content = json.loads(span.attributes["gen_ai.prompt.0.content"])
+    assert content[0] == {"type": "text", "text": "What does the report say?"}
+    assert content[1]["type"] == "artifact_ref"
+
+
+def test_responses_turns_join_their_conversation(uploads):
+    context = pytest.importorskip("traceloop.sdk.context")
+    from opentelemetry.instrumentation.openai.v1.responses_wrappers import set_data_attributes
+
+    span = RecordingSpan()
+    with context.set_conversation_id("conv-e2e"):
+        set_data_attributes(_responses_turn(), span)
+    assert span.attributes["moda.conversation_id"] == "conv-e2e"
