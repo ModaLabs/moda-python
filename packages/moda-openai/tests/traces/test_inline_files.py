@@ -254,3 +254,32 @@ def test_responses_without_request_user_do_not_adopt_consumer_ids(uploads):
         set_data_attributes(turn, span)
     assert "moda.user_id" not in span.attributes
     assert span.attributes["moda.conversation_id"] == expected
+
+
+def test_cached_response_does_not_retain_unrelated_context_values():
+    import gc
+    import weakref
+    from contextvars import ContextVar
+    from opentelemetry.instrumentation.openai.v1.responses_wrappers import responses
+
+    pytest.importorskip("traceloop.sdk.context")
+
+    class Request:
+        pass
+
+    request_var = ContextVar("unrelated_request")
+    request = Request()
+    reference = weakref.ref(request)
+    token = request_var.set(request)
+    try:
+        turn = _responses_turn()
+        responses["memory-regression"] = turn
+    finally:
+        request_var.reset(token)
+    del request
+    try:
+        gc.collect()
+        assert reference() is None
+        assert responses["memory-regression"] is turn
+    finally:
+        responses.pop("memory-regression", None)
