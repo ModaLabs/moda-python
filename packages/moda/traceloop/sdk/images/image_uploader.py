@@ -30,9 +30,9 @@ class ImageUploader:
         self.api_key = api_key
         self.logger = logging.getLogger(__name__)
         self._lock = threading.Lock()
-        self._executor = None
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
         self._executor_pid = os.getpid()
-        self._pending = set()
+        self._pending: set[concurrent.futures.Future[None]] = set()
         self._pending_bytes = 0
 
     def upload_base64_image(
@@ -69,7 +69,7 @@ class ImageUploader:
             self._pending.add(future)
         future.add_done_callback(self._forget)
 
-    def _forget(self, future: concurrent.futures.Future) -> None:
+    def _forget(self, future: concurrent.futures.Future[None]) -> None:
         with self._lock:
             self._pending.discard(future)
 
