@@ -1,3 +1,9 @@
+## Unreleased
+
+### Feat
+
+- **moda**: Add `moda.identify()`, `moda.group()` and `moda.track_subscription()` for end-user and account properties, delivered in non-blocking batches to the ingest worker; `moda.flush()` also drains them
+
 ## v0.51.0 (2026-01-20)
 
 ### Feat
