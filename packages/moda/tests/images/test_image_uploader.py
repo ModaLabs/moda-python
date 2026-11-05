@@ -1,7 +1,9 @@
 import asyncio
 import base64
+import concurrent.futures
 import hashlib
 import logging
+import multiprocessing
 import threading
 from time import monotonic
 
@@ -169,3 +171,57 @@ async def test_a_forked_process_gets_its_own_workers(monkeypatch):
         assert len(uploads) == 2
     finally:
         await server.close()
+
+
+@pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="requires fork")
+@pytest.mark.parametrize("first_action", ["flush", "submit"])
+def test_fork_with_lock_held_resets_upload_state(first_action, monkeypatch):
+    uploader = ImageUploader("http://unused", "key")
+    before = uploader._workers()
+    uploader._pending.add(concurrent.futures.Future())
+    uploader._pending_bytes = image_uploader.MAX_PENDING_BYTES
+    sent = []
+
+    async def put(url, image_file):
+        sent.append((url, image_file))
+
+    monkeypatch.setattr(uploader, "_put", put)
+    locked = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        with uploader._lock:
+            locked.set()
+            release.wait()
+
+    def child():
+        if first_action == "flush":
+            uploader.flush(timeout=0)
+            assert not uploader._pending
+            assert uploader._pending_bytes == 0
+        uploader.upload_base64_image("1", "2", "shot.png", ENCODED)
+        uploader.flush(timeout=2)
+        assert uploader._executor is not before
+        assert len(sent) == 1
+        assert uploader._pending_bytes == 0
+        uploader._executor.shutdown()
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    process = multiprocessing.get_context("fork").Process(target=child)
+    try:
+        assert locked.wait(timeout=2)
+        process.start()
+        process.join(timeout=5)
+        assert process.exitcode == 0, "child upload/flush hung or failed after fork"
+        assert uploader._executor is before
+        assert uploader._pending_bytes == image_uploader.MAX_PENDING_BYTES
+    finally:
+        if process.pid is not None:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=2)
+            process.close()
+        release.set()
+        holder.join(timeout=2)
+        before.shutdown()

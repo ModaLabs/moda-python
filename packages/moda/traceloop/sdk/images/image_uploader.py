@@ -31,7 +31,7 @@ class ImageUploader:
         self.logger = logging.getLogger(__name__)
         self._lock = threading.Lock()
         self._executor = None
-        self._executor_pid = None
+        self._executor_pid = os.getpid()
         self._pending = set()
         self._pending_bytes = 0
 
@@ -50,12 +50,14 @@ class ImageUploader:
 
     def flush(self, timeout: float = FLUSH_TIMEOUT_SECONDS) -> None:
         """Wait for uploads in progress, so a short-lived process doesn't lose them."""
+        self._reset_after_fork()
         with self._lock:
             pending = list(self._pending)
         if pending:
             concurrent.futures.wait(pending, timeout=timeout)
 
     def _submit(self, url: str, image_file: str) -> None:
+        self._reset_after_fork()
         size = len(image_file)
         with self._lock:
             workers = self._workers()
@@ -71,9 +73,18 @@ class ImageUploader:
         with self._lock:
             self._pending.discard(future)
 
+    def _reset_after_fork(self) -> None:
+        # Check before acquiring the lock: its owning thread may only exist in
+        # the parent. Inherited futures and workers cannot finish in this child.
+        if self._executor_pid != os.getpid():
+            self._lock = threading.Lock()
+            self._executor = None
+            self._pending = set()
+            self._pending_bytes = 0
+            self._executor_pid = os.getpid()
+
     def _workers(self) -> concurrent.futures.ThreadPoolExecutor:
-        # Threads don't survive a fork, so a forked worker process needs its own pool.
-        if self._executor is None or self._executor_pid != os.getpid():
+        if self._executor is None:
             self._executor = concurrent.futures.ThreadPoolExecutor(
                 max_workers=UPLOAD_WORKERS, thread_name_prefix="moda-image-upload"
             )
