@@ -32,11 +32,19 @@ async def test_images_documents_and_tool_result_screenshots_become_references(up
     content = [
         {"type": "text", "text": "What changed?"},
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(PNG)}},
-        {"type": "document", "title": "report.pdf", "source": {"type": "base64", "media_type": "application/pdf", "data": b64(PDF)}},
-        {"type": "tool_result", "tool_use_id": "call-1", "content": [
-            {"type": "text", "text": "clicked"},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(PNG)}},
-        ]},
+        {
+            "type": "document",
+            "title": "report.pdf",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": b64(PDF)},
+        },
+        {
+            "type": "tool_result",
+            "tool_use_id": "call-1",
+            "content": [
+                {"type": "text", "text": "clicked"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(PNG)}},
+            ],
+        },
         {"type": "image", "source": {"type": "url", "url": "https://example.test/a.png"}},
     ]
     dumped = json.loads(await span_utils._dump_content(0, content, MagicMock()))
@@ -52,8 +60,10 @@ async def test_images_documents_and_tool_result_screenshots_become_references(up
 @pytest.mark.asyncio
 async def test_a_file_that_cannot_be_kept_leaves_a_placeholder(monkeypatch):
     monkeypatch.setattr(Config, "upload_file", lambda *_: None)
-    content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "not base64!"}},
-               {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(PNG)}}]
+    content = [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "not base64!"}},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(PNG)}},
+    ]
     dumped = json.loads(await span_utils._dump_content(0, content, MagicMock()))
     assert dumped == [{"type": "text", "text": inline_files.FILE_NOT_CAPTURED}] * 2
 
